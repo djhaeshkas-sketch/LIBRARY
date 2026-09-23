@@ -838,9 +838,35 @@ function Library:CreateWindow(cfg)
 	-- кнопка-папка: открывает Save/Load/Delete конфигов
 	Window:AddTopButton(self.Icons.Config, "Cfg", function() Window:OpenConfigPopup() end)
 
+	-- Анимация показа/скрытия окна (скейл + фейд, туда — Back Out, обратно — Back In)
+	local visTween
 	function Window:SetVisible(state)
+		if state == Window.Visible then
+			return
+		end
 		Window.Visible = state
-		main.Visible = state
+		if visTween then
+			visTween:Cancel()
+			visTween = nil
+		end
+		Window:ClosePopup()
+		Window:CloseConfigPopup()
+
+		local targetH = Window.Minimized and 45 or size.Y
+
+		if state then
+			main.Visible = true
+			main.Size = UDim2.new()
+			main.BackgroundTransparency = 1
+			visTween = Tween(main, 0.35, { Size = UDim2.fromOffset(size.X, targetH), BackgroundTransparency = 0 }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		else
+			visTween = Tween(main, 0.25, { Size = UDim2.new(), BackgroundTransparency = 1 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+			visTween.Completed:Connect(function()
+				if not Window.Visible then
+					main.Visible = false
+				end
+			end)
+		end
 	end
 	function Window:Toggle() Window:SetVisible(not Window.Visible) end
 
