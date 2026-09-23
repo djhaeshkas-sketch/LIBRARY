@@ -912,7 +912,8 @@ function Library:CreateWindow(cfg)
 	------------------------------------------------------------------
 	-- Sidebar: кнопки и вкладки
 	------------------------------------------------------------------
-	local function makeSidebarButton(name, icon, glyph)
+	local function makeSidebarButton(name, icon, glyph, iconSize)
+		iconSize = iconSize or 18
 		local btn = Create("TextButton", {
 			Name = name, Size = UDim2.new(1, -16, 0, 34), BackgroundColor3 = T.Card, BackgroundTransparency = 1,
 			Text = "", AutoButtonColor = false, LayoutOrder = nextOrder(),
@@ -928,10 +929,10 @@ function Library:CreateWindow(cfg)
 		local iconObj
 		if icon and icon ~= "" then
 			iconObj = Create("ImageLabel", {
-				Size = UDim2.fromOffset(18, 18), Position = UDim2.new(0, 12, 0.5, -9), BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(iconSize, iconSize), Position = UDim2.new(0, 12, 0.5, -iconSize / 2), BackgroundTransparency = 1,
 				Image = icon, ImageColor3 = T.Inactive, ScaleType = Enum.ScaleType.Fit,
 			}, btn)
-			x = 38
+			x = 12 + iconSize + 8
 		end
 		local text = Label(btn, {
 			Size = UDim2.new(1, -(x + 6), 1, 0), Position = UDim2.fromOffset(x, 0), Text = name,
@@ -964,9 +965,9 @@ function Library:CreateWindow(cfg)
 		})
 	end
 
-	-- Кнопка в сайдбаре без вкладки (например "Выйти")
-	function Window:AddSidebarButton(name, icon, callback)
-		local btn = makeSidebarButton(name, icon)
+	-- Кнопка в сайдбаре без вкладки (например "Выйти"). iconSize необязателен (по умолчанию 24, крупнее вкладок)
+	function Window:AddSidebarButton(name, icon, callback, iconSize)
+		local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
 		btn.MouseButton1Click:Connect(function() Fire(callback) end)
 		return btn
 	end
