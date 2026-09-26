@@ -1692,7 +1692,6 @@ end)
 			TextSize = 10, TextColor3 = T.SubText, LayoutOrder = nextOrder(),
 		})
 	end
-
 	-- Кнопка в сайдбаре без вкладки (например "Выйти"). iconSize необязателен (по умолчанию 24, крупнее вкладок)
 	function Window:AddSidebarButton(name, icon, callback, iconSize)
 		local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
