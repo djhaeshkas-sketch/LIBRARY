@@ -1695,10 +1695,6 @@ function Library:CreateWindow(cfg)
         return btn
     end
 
-    Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
-        Window:OpenThemePopup()
-    end)
-
 	function Window:SelectTab(tab)
 		if type(tab) == "string" then
 			tab = Window.Tabs[tab]
