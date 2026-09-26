@@ -41,8 +41,8 @@ local Library = {
 
 	-- Пустые строки = вместо картинки рисуется текстовый символ. Впиши свои rbxassetid.
 	Icons = {
-		NotifyInfo = "", NotifySuccess = "", NotifyError = "",
-		Logo = "", Search = "", CardSettings = "", CardBind = "", Config = "", Friends = "",
+		NotifyInfo = "rbxassetid://121042277274063", NotifySuccess = "rbxassetid://133903701251813", NotifyError = "rbxassetid://97006717471368",
+		Logo = "rbxassetid://71415822020344", Search = "rbxassetid://77792594034833", CardSettings = "rbxassetid://136573691545180", CardBind = "rbxassetid://99134701029849", Config = "rbxassetid://120570869280945", Friends = "rbxassetid://7992557358",
 	},
 
 	-- Готовые темы. SetTheme("имя") мутирует Library.Theme в тот же объект (не заменяет ссылку),
@@ -180,15 +180,18 @@ local function Connect(signal, fn)
 	return c
 end
 
--- Универсальный drag: двигает frame за handle, без привязки к границам экрана.
--- Используется для попапов (перетаскивание за заголовок).
-local function MakeDraggable(handle, frame)
+-- Универсальный drag: двигает frame (AnchorPoint 0.5,0.5) за handle.
+-- boundsFn, если передан, должен вернуть Vector2 размера области (например, размер экрана) —
+-- тогда frame клэмпится внутри неё и не может "уйти" за край и пропасть.
+local function MakeDraggable(handle, frame, boundsFn)
 	local dragging, dragStart, startPos = false, nil, nil
 	handle.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			dragStart = input.Position
-			startPos = frame.Position
+			-- берём именно AbsolutePosition (реальный левый верхний угол на экране),
+			-- чтобы не зависеть от того, Scale или Offset сейчас в Position
+			startPos = Vector2.new(frame.AbsolutePosition.X, frame.AbsolutePosition.Y)
 		end
 	end)
 	handle.InputEnded:Connect(function(input)
@@ -199,7 +202,16 @@ local function MakeDraggable(handle, frame)
 	Connect(UserInputService.InputChanged, function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local d = input.Position - dragStart
-			frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			local newX = startPos.X + d.X
+			local newY = startPos.Y + d.Y
+			if boundsFn then
+				local bounds = boundsFn()
+				local w, h = frame.AbsoluteSize.X, frame.AbsoluteSize.Y
+				newX = math.clamp(newX, 0, math.max(bounds.X - w, 0))
+				newY = math.clamp(newY, 0, math.max(bounds.Y - h, 0))
+			end
+			-- AnchorPoint у попапов (0.5, 0.5) — переводим левый верхний угол обратно в координаты центра
+			frame.Position = UDim2.fromOffset(newX + frame.AbsoluteSize.X / 2, newY + frame.AbsoluteSize.Y / 2)
 		end
 	end)
 end
@@ -320,6 +332,21 @@ function Library:_repaintTheme()
 			if w.Topbar then Tween(w.Topbar, 0.25, { BackgroundColor3 = T.Topbar }) end
 			for _, tab in ipairs(w.TabList) do
 				if tab._setSelected then tab._setSelected(w.Current == tab) end
+			end
+			if w._separators then
+				for _, lbl in ipairs(w._separators) do
+					if lbl.Parent then lbl.TextColor3 = T.SubText end
+				end
+			end
+		end
+
+		-- перекрасить открытые попапы (если они сейчас на экране)
+		for _, key in ipairs({ "_popupFrame", "_configFrame", "_friendFrame", "_themeFrame" }) do
+			local frame = w[key]
+			if frame and frame.Parent then
+				Tween(frame, 0.25, { BackgroundColor3 = T.Popup })
+				local stroke = frame:FindFirstChildOfClass("UIStroke")
+				if stroke then Tween(stroke, 0.25, { Color = T.ActiveBorder }) end
 			end
 		end
 	end
@@ -604,8 +631,12 @@ Renderers.Slider = function(el, parent, conns)
 	local function setFromX(x)
 		local a = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
 		local v = min + a * (max - min)
-		v = math.clamp(math.floor(v / step + 0.5) * step, min, max)
-		v = tonumber(string.format("%.4f", v))
+		v = math.clamp(v, min, max)
+		-- округление к ближайшему шагу; math.floor(v/step + 0.5) корректно и для отрицательных v,
+		-- т.к. считаем от абсолютного значения шага, а не от знака v
+		v = math.floor(v / step + 0.5) * step
+		v = math.clamp(v, min, max)
+		v = tonumber(string.format("%.4f", v)) -- убираем погрешность float
 		if v ~= el.Value then
 			el:Set(v)
 		end
@@ -670,6 +701,11 @@ Renderers.Dropdown = function(el, parent, conns, hostFrame)
 		local abs = btn.AbsolutePosition
 		local relX = abs.X - hostFrame.AbsolutePosition.X
 		local relY = abs.Y - hostFrame.AbsolutePosition.Y + btn.AbsoluteSize.Y + 2
+
+		-- клэмпим в пределах hostFrame, чтобы список не "улетал" и не резался за край
+		local bounds = hostFrame.AbsoluteSize
+		relX = math.clamp(relX, 0, math.max(bounds.X - 110, 0))
+		relY = math.clamp(relY, 0, math.max(bounds.Y - listH, 0))
 
 		list = Create("Frame", {
 			Size = UDim2.fromOffset(110, listH), Position = UDim2.fromOffset(relX, relY),
@@ -871,7 +907,9 @@ local function MeasureElements(elements)
 	for _, el in ipairs(elements) do
 		if el.Type == "Group" then
 			h += ROW_HEIGHT.Group + 8
-			h += MeasureElements(el.Elements) -- грубая оценка (не критично — есть скролл)
+			if not el.Collapsed then
+				h += MeasureElements(el.Elements) -- грубая оценка (не критично — есть скролл)
+			end
 		else
 			h += (ROW_HEIGHT[el.Type] or 30) + 8
 		end
@@ -933,6 +971,16 @@ function Library:CreateWindow(cfg)
 	Window.Main = main
 	Window.MainStroke = mainStroke
 	Window.BgGrad = bgGrad
+
+	-- Overlay: отдельный слой поверх main (создан позже main => рендерится сверху, как сиблинг в gui).
+	-- Здесь живут блокер кликов, попапы настроек/конфигов/друзей и списки дропдаунов —
+	-- у main стоит ClipsDescendants = true, из-за чего всё вышеперечисленное резалось/пропадало
+	-- на краю окна. На overlay такого ограничения нет, поэтому попапы можно таскать
+	-- в любое место экрана, и они никогда не "срезаются".
+	local overlay = Create("Frame", {
+		Name = "Overlay", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+	}, gui)
+	Window.Overlay = overlay
 
 	-- Sidebar
 	local sidebar = Create("Frame", { Name = "Sidebar", Size = UDim2.new(0, 160, 1, 0), BackgroundColor3 = T.Sidebar, BorderSizePixel = 0 }, main)
@@ -1023,11 +1071,12 @@ function Library:CreateWindow(cfg)
 		local b = Create("TextButton", {
 			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
 			AutoButtonColor = false, ZIndex = zindex or 90, Active = true,
-		}, main)
+		}, overlay)
 		b.MouseButton1Click:Connect(function()
 			self:ClosePopup()
 			self:CloseConfigPopup()
 			self:CloseFriendPopup()
+            self:CloseThemePopup()
 		end)
 		self._blocker = b
 	end
@@ -1036,6 +1085,18 @@ function Library:CreateWindow(cfg)
 			self._blocker:Destroy()
 			self._blocker = nil
 		end
+	end
+
+	-- Позиция по центру текущего положения окна (main может быть уже подвинут пользователем),
+	-- в системе координат overlay (обычно та же, что у main, т.к. overlay = полный экран без смещения).
+	local function centerOverMain()
+		return UDim2.fromOffset(
+			main.AbsolutePosition.X + main.AbsoluteSize.X / 2 - overlay.AbsolutePosition.X,
+			main.AbsolutePosition.Y + main.AbsoluteSize.Y / 2 - overlay.AbsolutePosition.Y
+		)
+	end
+	local function overlayBounds()
+		return overlay.AbsoluteSize
 	end
 
 	------------------------------------------------------------------
@@ -1058,6 +1119,7 @@ function Library:CreateWindow(cfg)
 			ClearRefreshRecursive(popupFeature.Elements)
 		end
 		popupFeature = nil
+		self._popupFrame = nil
 		self:_removeBlocker()
 		Tween(p, 0.15, { Size = UDim2.fromOffset(280, 0), BackgroundTransparency = 1 })
 		task.delay(0.15, function() p:Destroy() end)
@@ -1068,6 +1130,7 @@ function Library:CreateWindow(cfg)
 		self:ClosePopup()
 		self:CloseConfigPopup()
 		self:CloseFriendPopup()
+        self:CloseThemePopup()
 		if same or #feature.Elements == 0 then
 			return
 		end
@@ -1077,14 +1140,14 @@ function Library:CreateWindow(cfg)
 		self:_addBlocker(90)
 
 		local p = Create("Frame", {
-			Name = feature.Name .. "_Settings", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Name = feature.Name .. "_Settings", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
 			Size = UDim2.fromOffset(280, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
 			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
-		}, main)
+		}, overlay)
 		Corner(p, 8)
 		Stroke(p, T.ActiveBorder, 1)
 
-		-- заголовок — за него попап можно таскать
+		-- заголовок — за него попап можно таскать в любое место экрана (не резается и не пропадает)
 		local header = Create("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Active = true }, p)
 		Label(header, {
 			Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(14, 0),
@@ -1096,7 +1159,7 @@ function Library:CreateWindow(cfg)
 		}, header)
 		Corner(close, 5)
 		close.MouseButton1Click:Connect(function() self:ClosePopup() end)
-		MakeDraggable(header, p)
+		MakeDraggable(header, p, overlayBounds)
 
 		local list = Create("ScrollingFrame", {
 			Size = UDim2.new(1, -24, 1, -50), Position = UDim2.fromOffset(12, 44), BackgroundTransparency = 1,
@@ -1106,10 +1169,11 @@ function Library:CreateWindow(cfg)
 		Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, list)
 
 		for _, el in ipairs(feature.Elements) do
-			RenderElement(el, list, popupConns, main)
+			RenderElement(el, list, popupConns, overlay)
 		end
 
 		popup, popupFeature = p, feature
+		self._popupFrame = p
 		Tween(p, 0.2, { Size = UDim2.fromOffset(280, height), BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
 	end
 
@@ -1129,6 +1193,7 @@ function Library:CreateWindow(cfg)
 			c:Disconnect()
 		end
 		configConns = {}
+		self._configFrame = nil
 		self:_removeBlocker()
 		Tween(p, 0.15, { Size = UDim2.fromOffset(260, 0), BackgroundTransparency = 1 })
 		task.delay(0.15, function() p:Destroy() end)
@@ -1141,13 +1206,14 @@ function Library:CreateWindow(cfg)
 		end
 		self:ClosePopup()
 		self:CloseFriendPopup()
+        self:CloseThemePopup()
 		self:_addBlocker(90)
 
 		local p = Create("Frame", {
-			Name = "ConfigPopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Name = "ConfigPopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
 			Size = UDim2.fromOffset(260, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
 			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
-		}, main)
+		}, overlay)
 		Corner(p, 8)
 		Stroke(p, T.ActiveBorder, 1)
 
@@ -1162,7 +1228,7 @@ function Library:CreateWindow(cfg)
 		}, header)
 		Corner(close, 5)
 		close.MouseButton1Click:Connect(function() self:CloseConfigPopup() end)
-		MakeDraggable(header, p)
+		MakeDraggable(header, p, overlayBounds)
 
 		-- строка сохранения: имя + кнопка Save
 		local saveRow = Create("Frame", {
@@ -1246,6 +1312,7 @@ function Library:CreateWindow(cfg)
 		end)
 
 		configPopup = p
+		self._configFrame = p
 		refreshList()
 		Tween(p, 0.2, { BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
 	end
@@ -1266,6 +1333,7 @@ function Library:CreateWindow(cfg)
 			c:Disconnect()
 		end
 		friendConns = {}
+		self._friendFrame = nil
 		self:_removeBlocker()
 		Tween(p, 0.15, { Size = UDim2.fromOffset(260, 0), BackgroundTransparency = 1 })
 		task.delay(0.15, function() p:Destroy() end)
@@ -1277,14 +1345,15 @@ function Library:CreateWindow(cfg)
 			return
 		end
 		self:ClosePopup()
-		self:CloseConfigPopup()
+        self:CloseConfigPopup()
+        self:CloseThemePopup()
 		self:_addBlocker(90)
 
 		local p = Create("Frame", {
-			Name = "FriendPopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Name = "FriendPopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
 			Size = UDim2.fromOffset(260, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
 			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
-		}, main)
+		}, overlay)
 		Corner(p, 8)
 		Stroke(p, T.ActiveBorder, 1)
 
@@ -1299,7 +1368,7 @@ function Library:CreateWindow(cfg)
 		}, header)
 		Corner(close, 5)
 		close.MouseButton1Click:Connect(function() self:CloseFriendPopup() end)
-		MakeDraggable(header, p)
+		MakeDraggable(header, p, overlayBounds)
 
 		local addRow = Create("Frame", {
 			Size = UDim2.new(1, -24, 0, 32), Position = UDim2.fromOffset(12, 44),
@@ -1367,8 +1436,103 @@ function Library:CreateWindow(cfg)
 		nameBox.FocusLost:Connect(function(enter) if enter then tryAdd() end end)
 
 		friendPopup = p
+		self._friendFrame = p
 		refreshList()
 		Tween(p, 0.2, { BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
+	end
+    	------------------------------------------------------------------
+	-- Попап выбора темы
+	------------------------------------------------------------------
+	local themePopup, themeConns = nil, {}
+
+	function Window:CloseThemePopup()
+		if not themePopup then
+			self:_removeBlocker()
+			return
+		end
+		local p = themePopup
+		themePopup = nil
+		for _, c in ipairs(themeConns) do
+			c:Disconnect()
+		end
+		themeConns = {}
+		self._themeFrame = nil
+		self:_removeBlocker()
+		Tween(p, 0.15, { Size = UDim2.fromOffset(240, 0), BackgroundTransparency = 1 })
+		task.delay(0.15, function() p:Destroy() end)
+	end
+
+	function Window:OpenThemePopup()
+		if themePopup then
+			self:CloseThemePopup()
+			return
+		end
+		self:ClosePopup()
+		self:CloseConfigPopup()
+		self:CloseFriendPopup()
+        self:CloseThemePopup()
+		self:_addBlocker(90)
+
+		local p = Create("Frame", {
+			Name = "ThemePopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
+			Size = UDim2.fromOffset(240, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
+		}, overlay)
+		Corner(p, 8)
+		Stroke(p, T.ActiveBorder, 1)
+
+		local header = Create("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Active = true }, p)
+		Label(header, {
+			Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(14, 0),
+			Text = "Тема оформления", Font = Enum.Font.GothamBold, TextSize = 14,
+		})
+		local close = Create("TextButton", {
+			Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 4), BackgroundColor3 = Color3.fromRGB(80, 25, 25),
+			Text = "X", TextColor3 = T.Text, Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 5,
+		}, header)
+		Corner(close, 5)
+		close.MouseButton1Click:Connect(function() self:CloseThemePopup() end)
+		MakeDraggable(header, p, overlayBounds)
+
+		local list = Create("Frame", {
+			Size = UDim2.new(1, -24, 0, 0), Position = UDim2.fromOffset(12, 44),
+			BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y,
+		}, p)
+		Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+
+		-- список тем — идём по Library.Themes, чтобы автоматически поддерживать любые новые
+		local order = 0
+		local themeRows = {}
+		local function refreshRows()
+			for name, rowData in pairs(themeRows) do
+				local isCurrent = (Library.ThemeName == name)
+				rowData.row.BackgroundColor3 = isCurrent and Library.Theme.ActiveBorder or Library.Theme.Row
+				rowData.label.TextColor3 = isCurrent and Library.Theme.Text or Library.Theme.SubText
+			end
+		end
+
+		local themeOrder = { "Celestial", "PurpleNight", "Cosmos" }
+		for _, themeName in ipairs(themeOrder) do
+			if not Library.Themes[themeName] then continue end
+			order += 1
+			local row = Row(list, 32)
+			row.LayoutOrder = order
+			local label = RowLabel(row, themeName, { Size = UDim2.new(1, -20, 1, 0) })
+			local btn = Create("TextButton", {
+				Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 5,
+			}, row)
+			btn.MouseButton1Click:Connect(function()
+				Library:SetTheme(themeName)
+				refreshRows()
+			end)
+			themeRows[themeName] = { row = row, label = label }
+		end
+		refreshRows()
+
+		themePopup = p
+		self._themeFrame = p
+		local h = 44 + order * 38 + 12
+		Tween(p, 0.2, { Size = UDim2.fromOffset(240, h), BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
 	end
 
 	------------------------------------------------------------------
@@ -1384,8 +1548,9 @@ function Library:CreateWindow(cfg)
 	function Window:SetMinimized(state)
 		Window.Minimized = state
 		Window:ClosePopup()
-		Window:CloseConfigPopup()
-		Window:CloseFriendPopup()
+        Window:CloseConfigPopup()
+        Window:CloseFriendPopup()
+        Window:CloseThemePopup()
 		Tween(main, 0.35, { Size = UDim2.fromOffset(size.X, state and 45 or size.Y) })
 	end
 
@@ -1393,6 +1558,10 @@ function Library:CreateWindow(cfg)
 	Window:AddTopButton(self.Icons.Config, "Cfg", function() Window:OpenConfigPopup() end)
 	-- кнопка друзей
 	Window:AddTopButton(self.Icons.Friends, "♥", function() Window:OpenFriendPopup() end)
+
+    Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
+	Window:OpenThemePopup()
+end)
 
 	-- Анимация показа/скрытия окна (скейл + фейд, туда — Back Out, обратно — Back In)
 	local visTween
@@ -1408,6 +1577,7 @@ function Library:CreateWindow(cfg)
 		Window:ClosePopup()
 		Window:CloseConfigPopup()
 		Window:CloseFriendPopup()
+        Window:CloseThemePopup()
 
 		local targetH = Window.Minimized and 45 or size.Y
 
@@ -1540,6 +1710,7 @@ function Library:CreateWindow(cfg)
 		Window:ClosePopup()
 		Window:CloseConfigPopup()
 		Window:CloseFriendPopup()
+        Window:CloseThemePopup()
 		if Window.Current then
 			Window.Current._setSelected(false)
 			Window.Current.Scroll.Visible = false
@@ -1833,6 +2004,7 @@ function Library:CreateWindow(cfg)
 		Window:ClosePopup()
 		Window:CloseConfigPopup()
 		Window:CloseFriendPopup()
+        Window:CloseThemePopup()
 		gui:Destroy()
 		local idx = table.find(Library.Windows, Window)
 		if idx then
@@ -1870,9 +2042,6 @@ function Library:_init()
 	end)
 
 	self:_loadFriends()
-	-- Автозагрузка "lastconfig" — best-effort: срабатывает после того, как основной поток
-	-- скрипта (создание Window/Tab/Feature) завершится или уйдёт на паузу.
-	task.defer(function() self:AutoLoad() end)
 end
 
 ----------------------------------------------------------------------
@@ -1880,7 +2049,7 @@ end
 ----------------------------------------------------------------------
 function Library:AddFriend(name)
 	if not name or name == "" then return false end
-	name = tostring(name)
+	name = tostring(name):lower()
 	if table.find(self.FriendList, name) then return false end
 	table.insert(self.FriendList, name)
 	self:_saveFriends()
@@ -1888,15 +2057,33 @@ function Library:AddFriend(name)
 end
 
 function Library:RemoveFriend(name)
-	local idx = table.find(self.FriendList, name)
+	if not name or name == "" then return false end
+	local idx = table.find(self.FriendList, tostring(name):lower())
 	if not idx then return false end
 	table.remove(self.FriendList, idx)
 	self:_saveFriends()
 	return true
 end
 
-function Library:IsFriend(name)
-	return table.find(self.FriendList, name) ~= nil
+function Library:IsFriend(who)
+	if who == nil then return false end
+	local name
+	if type(who) == "string" then
+		name = who
+	elseif typeof(who) == "Instance" then
+		if who:IsA("Player") then
+			name = who.Name
+		elseif who:IsA("Model") then
+			local plr = game:GetService("Players"):GetPlayerFromCharacter(who)
+			if not plr then return false end
+			name = plr.Name
+		else
+			return false
+		end
+	else
+		return false
+	end
+	return table.find(self.FriendList, name:lower()) ~= nil
 end
 
 function Library:GetFriends()
@@ -1984,24 +2171,15 @@ function Library:ListConfigs()
 	if listfiles and isfolder and isfolder(self.ConfigFolder) then
 		for _, path in ipairs(listfiles(self.ConfigFolder)) do
 			local n = path:match("([^/\\]+)%.json$")
-			if n and n ~= "lastconfig" then table.insert(out, n) end
+			if n then table.insert(out, n) end
 		end
 	end
 	return out
 end
-
--- Пытается тихо подгрузить "lastconfig.json", если он есть. Вызывается автоматически
--- (см. Library:_init()), но можно дёрнуть и вручную сразу после построения всего UI.
-function Library:AutoLoad()
-	local ok = pcall(function() self:LoadConfig("lastconfig") end)
-	return ok
-end
-
 -- Пересобрать скрипт с сохранением настроек: сохраняет текущие Flags в lastconfig.json,
 -- выгружает текущий интерфейс и (если передан url) заново подгружает и исполняет скрипт
 -- через HttpGet+loadstring. Новый запуск сам подхватит lastconfig.json через AutoLoad().
 function Library:ReloadScript(url)
-	pcall(function() self:SaveConfig("lastconfig") end)
 	self:Unload()
 	if url and loadstring and game then
 		task.spawn(function()
@@ -2022,7 +2200,6 @@ end
 -- Unload: сохраняет lastconfig, выключает все фичи (Callback(false)), рвёт соединения, удаляет GUI
 ----------------------------------------------------------------------
 function Library:Unload()
-	pcall(function() self:SaveConfig("lastconfig") end)
 	for _, f in ipairs(self.Features) do
 		if f.Enabled then f:Set(false, true) end
 	end
