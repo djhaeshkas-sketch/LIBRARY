@@ -1695,7 +1695,6 @@ function Library:CreateWindow(cfg)
         return btn
     end
 
-    -- Кнопка "Темы" в сайдбаре (создаётся ПОСЛЕ объявления метода)
     Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
         Window:OpenThemePopup()
     end)
