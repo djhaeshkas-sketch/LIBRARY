@@ -1,0 +1,2218 @@
+--[[
+	Celestial UI Library (extended)
+
+	local Library = loadstring(readfile("CelestialLib.lua"))()   -- или HttpGet с твоего хоста
+	local Window  = Library:CreateWindow({ Title = "Celestial", ToggleKey = Enum.KeyCode.RightControl })
+	local Tab     = Window:AddTab("Render", "rbxassetid://...")
+	local Feature = Tab:AddFeature({ Name = "Arrows", Desc = "...", Callback = function(on) end })
+	Feature:AddSlider("Radius", { Name = "Радиус", Min = 40, Max = 300, Default = 80 })
+	Feature:AddTextBox("Note", { Name = "Заметка", Placeholder = "..." })
+	local Group = Feature:AddGroup("Дополнительно")
+	Group:AddToggle("Sub", { Name = "Подопция" })
+
+	Library:SetTheme("Celestial" | "PurpleNight" | "Cosmos")
+	Library:AddFriend("SomeName") / Library:RemoveFriend(...) / Library:IsFriend(...) / Library:GetFriends()
+
+	-- Автосохранение/автозагрузка конфига "lastconfig" встроены (Library:AutoLoad() вызывается сама
+	-- через task.defer после загрузки скрипта; Library:Unload() сама сохраняет lastconfig).
+	-- Library:ReloadScript(url) — пересобрать скрипт с сохранением текущих настроек (через lastconfig.json).
+
+	print(Feature.Options.Radius.Value, Library.Flags["Render.Arrows.Radius"])
+]]
+
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+
+----------------------------------------------------------------------
+-- Library state
+----------------------------------------------------------------------
+local Library = {
+	Flags = {},           -- Flags["Tab.Feature"] = bool, Flags["Tab.Feature.Option"] = value
+	Elements = {},        -- Elements[flag] = element
+	Features = {},        -- список всех фич
+	FeatureByFlag = {},
+	Windows = {},
+	Connections = {},     -- глобальные соединения (отключаются в Unload)
+	ConfigFolder = "CelestialUI",
+	FriendList = {},       -- общий список "друзей" на уровне модуля (не привязан к окну)
+	_themeRepainters = {},
+
+	-- Пустые строки = вместо картинки рисуется текстовый символ. Впиши свои rbxassetid.
+	Icons = {
+		NotifyInfo = "rbxassetid://121042277274063", NotifySuccess = "rbxassetid://133903701251813", NotifyError = "rbxassetid://97006717471368",
+		Logo = "rbxassetid://71415822020344", Search = "rbxassetid://77792594034833", CardSettings = "rbxassetid://136573691545180", CardBind = "rbxassetid://99134701029849", Config = "rbxassetid://120570869280945", Friends = "rbxassetid://7992557358",
+	},
+
+	-- Готовые темы. SetTheme("имя") мутирует Library.Theme в тот же объект (не заменяет ссылку),
+	-- поэтому весь код, который читает Library.Theme.* "на лету" (hover, refresh, popup-рендеры),
+	-- подхватывает новые цвета сам. То, что было отрисовано один раз и не перечитывается —
+	-- перекрашивается вручную в Library:_repaintTheme().
+	Themes = {
+		Celestial = {
+			Background      = Color3.fromRGB(10, 10, 14),
+			BackgroundAlt   = Color3.fromHex("#14081e"),
+			Sidebar         = Color3.fromRGB(13, 13, 18),
+			Topbar          = Color3.fromRGB(13, 13, 18),
+			Card            = Color3.fromRGB(24, 24, 32),
+			CardHover       = Color3.fromRGB(32, 32, 42),
+			Row             = Color3.fromRGB(30, 30, 40),
+			Popup           = Color3.fromRGB(18, 18, 26),
+			Accent          = Color3.fromRGB(105, 0, 105),
+			AccentText      = Color3.fromRGB(220, 180, 255),
+			Text            = Color3.fromRGB(255, 255, 255),
+			SubText         = Color3.fromRGB(140, 140, 150),
+			Border          = Color3.fromRGB(35, 35, 45),
+			ActiveBorder    = Color3.fromRGB(148, 0, 211),
+			Inactive        = Color3.fromRGB(120, 120, 130),
+			ActiveGradientA = Color3.fromHex("#2a0a3d"),
+			ActiveGradientB = Color3.fromHex("#4a1670"),
+		},
+		PurpleNight = {
+			Background      = Color3.fromRGB(6, 6, 16),
+			BackgroundAlt   = Color3.fromHex("#0d0330"),
+			Sidebar         = Color3.fromRGB(9, 9, 20),
+			Topbar          = Color3.fromRGB(9, 9, 20),
+			Card            = Color3.fromRGB(18, 18, 34),
+			CardHover       = Color3.fromRGB(26, 26, 46),
+			Row             = Color3.fromRGB(22, 22, 40),
+			Popup           = Color3.fromRGB(13, 13, 28),
+			Accent          = Color3.fromRGB(70, 40, 180),
+			AccentText      = Color3.fromRGB(190, 170, 255),
+			Text            = Color3.fromRGB(235, 235, 255),
+			SubText         = Color3.fromRGB(130, 130, 170),
+			Border          = Color3.fromRGB(28, 28, 50),
+			ActiveBorder    = Color3.fromRGB(90, 60, 220),
+			Inactive        = Color3.fromRGB(100, 100, 140),
+			ActiveGradientA = Color3.fromHex("#150a3d"),
+			ActiveGradientB = Color3.fromHex("#2f1680"),
+		},
+		Cosmos = { -- чёрно-белая тема
+			Background      = Color3.fromRGB(8, 8, 8),
+			BackgroundAlt   = Color3.fromRGB(20, 20, 20),
+			Sidebar         = Color3.fromRGB(12, 12, 12),
+			Topbar          = Color3.fromRGB(12, 12, 12),
+			Card            = Color3.fromRGB(22, 22, 22),
+			CardHover       = Color3.fromRGB(32, 32, 32),
+			Row             = Color3.fromRGB(28, 28, 28),
+			Popup           = Color3.fromRGB(16, 16, 16),
+			Accent          = Color3.fromRGB(200, 200, 200),
+			AccentText      = Color3.fromRGB(255, 255, 255),
+			Text            = Color3.fromRGB(255, 255, 255),
+			SubText         = Color3.fromRGB(150, 150, 150),
+			Border          = Color3.fromRGB(45, 45, 45),
+			ActiveBorder    = Color3.fromRGB(230, 230, 230),
+			Inactive        = Color3.fromRGB(110, 110, 110),
+			ActiveGradientA = Color3.fromRGB(35, 35, 35),
+			ActiveGradientB = Color3.fromRGB(70, 70, 70),
+		},
+	},
+}
+Library.ThemeName = "Celestial"
+Library.Theme = {}
+for k, v in pairs(Library.Themes.Celestial) do
+	Library.Theme[k] = v
+end
+
+----------------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------------
+local function ProtectGui(gui)
+	if syn and syn.protect_gui then
+		syn.protect_gui(gui)
+		gui.Parent = CoreGui -- в оригинале в этой ветке Parent не выставлялся
+	elseif gethui then
+		gui.Parent = gethui()
+	else
+		gui.Parent = CoreGui
+	end
+end
+
+local function Create(class, props, parent)
+	local inst = Instance.new(class)
+	for k, v in pairs(props or {}) do
+		inst[k] = v
+	end
+	if parent then
+		inst.Parent = parent -- Parent ставим последним (быстрее и без лишних пересчётов)
+	end
+	return inst
+end
+
+local function Corner(inst, radius)
+	return Create("UICorner", { CornerRadius = UDim.new(0, radius) }, inst)
+end
+
+local function Stroke(inst, color, thickness)
+	return Create("UIStroke", {
+		Color = color,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, inst)
+end
+
+local function Tween(inst, time, props, style, dir)
+	local tw = TweenService:Create(inst, TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+	tw:Play()
+	return tw
+end
+
+local function Loop(inst, time, props)
+	local tw = TweenService:Create(inst, TweenInfo.new(time, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), props)
+	tw:Play()
+	return tw
+end
+
+local function Fire(cb, ...)
+	if not cb then
+		return
+	end
+	local ok, err = pcall(cb, ...)
+	if not ok then
+		warn("[CelestialLib] callback error: " .. tostring(err))
+	end
+end
+
+local function Connect(signal, fn)
+	local c = signal:Connect(fn)
+	table.insert(Library.Connections, c)
+	return c
+end
+
+-- Универсальный drag: двигает frame (AnchorPoint 0.5,0.5) за handle.
+-- boundsFn, если передан, должен вернуть Vector2 размера области (например, размер экрана) —
+-- тогда frame клэмпится внутри неё и не может "уйти" за край и пропасть.
+local function MakeDraggable(handle, frame, boundsFn)
+	local dragging, dragStart, startPos = false, nil, nil
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			-- берём именно AbsolutePosition (реальный левый верхний угол на экране),
+			-- чтобы не зависеть от того, Scale или Offset сейчас в Position
+			startPos = Vector2.new(frame.AbsolutePosition.X, frame.AbsolutePosition.Y)
+		end
+	end)
+	handle.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	Connect(UserInputService.InputChanged, function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			local newX = startPos.X + d.X
+			local newY = startPos.Y + d.Y
+			if boundsFn then
+				local bounds = boundsFn()
+				local w, h = frame.AbsoluteSize.X, frame.AbsoluteSize.Y
+				newX = math.clamp(newX, 0, math.max(bounds.X - w, 0))
+				newY = math.clamp(newY, 0, math.max(bounds.Y - h, 0))
+			end
+			-- AnchorPoint у попапов (0.5, 0.5) — переводим левый верхний угол обратно в координаты центра
+			frame.Position = UDim2.fromOffset(newX + frame.AbsoluteSize.X / 2, newY + frame.AbsoluteSize.Y / 2)
+		end
+	end)
+end
+
+local function Label(parent, props)
+	local base = {
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = Library.Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}
+	for k, v in pairs(props) do
+		base[k] = v
+	end
+	return Create("TextLabel", base, parent)
+end
+
+-- Иконка-кнопка: ImageButton если есть id, иначе текстовый символ
+local function IconButton(parent, iconId, glyph, size)
+	local T = Library.Theme
+	local btn
+	if iconId and iconId ~= "" then
+		btn = Create("ImageButton", {
+			Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1,
+			Image = iconId, ImageColor3 = T.SubText, ScaleType = Enum.ScaleType.Fit,
+		}, parent)
+	else
+		btn = Create("TextButton", {
+			Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1,
+			Text = glyph, TextColor3 = T.SubText, Font = Enum.Font.GothamBold, TextSize = size - 4,
+		}, parent)
+	end
+	local prop = btn:IsA("ImageButton") and "ImageColor3" or "TextColor3"
+	btn.MouseEnter:Connect(function() Tween(btn, 0.1, { [prop] = Library.Theme.Text }) end)
+	btn.MouseLeave:Connect(function() Tween(btn, 0.1, { [prop] = Library.Theme.SubText }) end)
+	return btn, prop
+end
+
+-- (де)сериализация значений для конфигов
+local function Encode(v)
+	if typeof(v) == "Color3" then
+		return { t = "c3", r = v.R, g = v.G, b = v.B }
+	elseif typeof(v) == "EnumItem" then
+		return { t = "key", n = v.Name }
+	end
+	return v
+end
+
+local function Decode(v)
+	if type(v) == "table" then
+		if v.t == "c3" then
+			return Color3.new(v.r, v.g, v.b)
+		elseif v.t == "key" then
+			local ok, key = pcall(function() return Enum.KeyCode[v.n] end)
+			return ok and key or nil
+		end
+	end
+	return v
+end
+
+-- Ждёт следующую клавишу; Esc/Backspace = сбросить (cb(nil))
+function Library:_listenKey(cb)
+	self._listening = true
+	local conn
+	conn = UserInputService.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then
+			return
+		end
+		conn:Disconnect()
+		task.defer(function() self._listening = false end) -- чтобы глобальный обработчик не поймал ту же клавишу
+		if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.Backspace then
+			cb(nil)
+		else
+			cb(input.KeyCode)
+		end
+	end)
+end
+
+----------------------------------------------------------------------
+-- Themes
+----------------------------------------------------------------------
+
+-- Переключает тему целиком. Мутирует Library.Theme "на месте", поэтому весь код,
+-- который каждый раз заново читает Library.Theme.* (hover-эффекты, refresh() элементов,
+-- рендеры попапов), сразу подхватывает новые цвета. Остальное (уже нарисованные
+-- фоны сайдбара/топбара/карточек, обводка окна) перекрашивается явно ниже.
+function Library:SetTheme(name)
+	local preset = self.Themes[name]
+	if not preset then
+		warn("[CelestialLib] неизвестная тема: " .. tostring(name) .. " (доступны: Celestial, PurpleNight, Cosmos)")
+		return false
+	end
+	self.ThemeName = name
+	for k, v in pairs(preset) do
+		self.Theme[k] = v
+	end
+	self:_repaintTheme()
+	return true
+end
+
+function Library:_repaintTheme()
+	local T = self.Theme
+
+	for _, w in ipairs(self.Windows) do
+		if w.Main and w.Main.Parent then
+			if w.MainStroke then
+				Tween(w.MainStroke, 0.25, { Color = T.Border })
+			end
+			if w.BgGrad then
+				w.BgGrad.Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, T.Background),
+					ColorSequenceKeypoint.new(0.5, T.BackgroundAlt),
+					ColorSequenceKeypoint.new(1, T.Background),
+				})
+			end
+			if w.Sidebar then Tween(w.Sidebar, 0.25, { BackgroundColor3 = T.Sidebar }) end
+			if w.Topbar then Tween(w.Topbar, 0.25, { BackgroundColor3 = T.Topbar }) end
+			for _, tab in ipairs(w.TabList) do
+				if tab._setSelected then tab._setSelected(w.Current == tab) end
+			end
+			if w._separators then
+				for _, lbl in ipairs(w._separators) do
+					if lbl.Parent then lbl.TextColor3 = T.SubText end
+				end
+			end
+		end
+
+		-- перекрасить открытые попапы (если они сейчас на экране)
+		for _, key in ipairs({ "_popupFrame", "_configFrame", "_friendFrame", "_themeFrame" }) do
+			local frame = w[key]
+			if frame and frame.Parent then
+				Tween(frame, 0.25, { BackgroundColor3 = T.Popup })
+				local stroke = frame:FindFirstChildOfClass("UIStroke")
+				if stroke then Tween(stroke, 0.25, { Color = T.ActiveBorder }) end
+			end
+		end
+	end
+
+	for _, f in ipairs(self.Features) do
+		if f._repaint then
+			pcall(f._repaint)
+		end
+	end
+
+	for _, el in pairs(self.Elements) do
+		if el._refresh then
+			pcall(el._refresh)
+		end
+	end
+end
+
+----------------------------------------------------------------------
+-- Tooltips
+----------------------------------------------------------------------
+local tooltipGui, tooltipLabel
+
+function Library:_initTooltip()
+	if tooltipGui and tooltipGui.Parent then
+		return
+	end
+	tooltipGui = Create("ScreenGui", {
+		Name = "CelestialTooltip", ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 20000,
+	})
+	ProtectGui(tooltipGui)
+	tooltipLabel = Create("TextLabel", {
+		BackgroundColor3 = Color3.fromRGB(15, 15, 20), TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.Gotham, TextSize = 12, AutomaticSize = Enum.AutomaticSize.XY,
+		Visible = false, ZIndex = 500, Text = "", TextWrapped = true, BorderSizePixel = 0,
+		Size = UDim2.fromOffset(0, 0),
+	}, tooltipGui)
+	Create("UIPadding", {
+		PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
+		PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5),
+	}, tooltipLabel)
+	Corner(tooltipLabel, 5)
+	Stroke(tooltipLabel, Color3.fromRGB(80, 80, 100), 1)
+
+	Connect(UserInputService.InputChanged, function(input)
+		if tooltipLabel.Visible and input.UserInputType == Enum.UserInputType.MouseMovement then
+			tooltipLabel.Position = UDim2.fromOffset(input.Position.X + 16, input.Position.Y + 16)
+		end
+	end)
+end
+
+function Library:ShowTooltip(text)
+	if not text or text == "" then
+		return
+	end
+	self:_initTooltip()
+	tooltipLabel.Text = text
+	tooltipLabel.Visible = true
+	local ok, mouse = pcall(function() return UserInputService:GetMouseLocation() end)
+	if ok then
+		tooltipLabel.Position = UDim2.fromOffset(mouse.X + 16, mouse.Y + 16)
+	end
+end
+
+function Library:HideTooltip()
+	if tooltipLabel then
+		tooltipLabel.Visible = false
+	end
+end
+
+local function BindTooltip(row, text)
+	if not text or text == "" then
+		return
+	end
+	row.MouseEnter:Connect(function() Library:ShowTooltip(text) end)
+	row.MouseLeave:Connect(function() Library:HideTooltip() end)
+end
+
+----------------------------------------------------------------------
+-- Notifications
+----------------------------------------------------------------------
+local NOTIFY = {
+	info    = { border = Color3.fromRGB(148, 0, 211),  bg = Color3.fromHex("#4a148c"), icon = "NotifyInfo",    glyph = "i", sub = "Информация" },
+	success = { border = Color3.fromRGB(50, 255, 100), bg = Color3.fromHex("#1b5e20"), icon = "NotifySuccess", glyph = "✓", sub = "Готово" },
+	error   = { border = Color3.fromRGB(255, 60, 60),  bg = Color3.fromHex("#7f0000"), icon = "NotifyError",   glyph = "×", sub = "Ошибка" },
+}
+
+local notifyGui, notifyList
+local notifyCounter = 0
+
+local function GetNotifyList()
+	if notifyGui and notifyGui.Parent then
+		return notifyList
+	end
+	notifyGui = Create("ScreenGui", {
+		Name = "CelestialNotifications", ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 10000,
+	})
+	ProtectGui(notifyGui)
+	notifyList = Create("Frame", {
+		Size = UDim2.new(0, 320, 1, -20), Position = UDim2.new(1, -340, 0, 10), BackgroundTransparency = 1,
+	}, notifyGui)
+	-- UIListLayout сам двигает уведомления при добавлении/удалении (вместо ручного UpdatePositions)
+	Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, notifyList)
+	return notifyList
+end
+
+-- Library:Notify({ Title = "Speed включён", Text = "Функция активирована", Type = "success", Duration = 3 })
+function Library:Notify(opts)
+	if type(opts) == "string" then
+		opts = { Title = opts }
+	end
+	local T = self.Theme
+	local kind = NOTIFY[opts.Type or "info"] or NOTIFY.info
+	local duration = opts.Duration or 3
+
+	notifyCounter += 1
+	local holder = Create("Frame", {
+		Size = UDim2.new(1, 0, 0, 60), BackgroundTransparency = 1, LayoutOrder = -notifyCounter, -- новые сверху
+	}, GetNotifyList())
+
+	local n = Create("Frame", {
+		Size = UDim2.fromScale(1, 1), Position = UDim2.new(1, 40, 0, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+	}, holder)
+	Corner(n, 8)
+	local grad = Create("UIGradient", {
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromHex("#1a0a2e")),
+			ColorSequenceKeypoint.new(0.5, Color3.fromHex("#2d1b4e")),
+			ColorSequenceKeypoint.new(1, Color3.fromHex("#1a0a2e")),
+		}),
+	}, n)
+	Loop(grad, 4, { Rotation = 360 })
+	Stroke(n, kind.border, 1.5)
+
+	local iconBg = Create("Frame", {
+		Size = UDim2.fromOffset(36, 36), Position = UDim2.new(0, 12, 0.5, -18),
+		BackgroundColor3 = kind.bg, BorderSizePixel = 0,
+	}, n)
+	Corner(iconBg, 18)
+	local iconId = self.Icons[kind.icon]
+	if iconId and iconId ~= "" then
+		Create("ImageLabel", {
+			Size = UDim2.new(1, -8, 1, -8), Position = UDim2.fromOffset(4, 4),
+			BackgroundTransparency = 1, Image = iconId, ScaleType = Enum.ScaleType.Fit,
+		}, iconBg)
+	else
+		Label(iconBg, {
+			Size = UDim2.fromScale(1, 1), Text = kind.glyph, Font = Enum.Font.GothamBold,
+			TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center,
+		})
+	end
+
+	Label(n, {
+		Size = UDim2.new(1, -70, 0, 20), Position = UDim2.fromOffset(58, 8), Text = opts.Title or "",
+		Font = Enum.Font.GothamBold, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+	Label(n, {
+		Size = UDim2.new(1, -70, 0, 16), Position = UDim2.fromOffset(58, 30), Text = opts.Text or kind.sub,
+		TextSize = 11, TextColor3 = T.SubText,
+	})
+
+	local bar = Create("Frame", {
+		Size = UDim2.new(1, -4, 0, 2), Position = UDim2.new(0, 2, 1, -4),
+		BackgroundColor3 = kind.border, BorderSizePixel = 0,
+	}, n)
+	Corner(bar, 1)
+
+	Tween(n, 0.4, { Position = UDim2.new() }, Enum.EasingStyle.Back)
+	Tween(bar, duration, { Size = UDim2.new(0, 0, 0, 2) }, Enum.EasingStyle.Linear)
+
+	if opts.Type == "error" then
+		task.delay(0.4, function()
+			for _ = 1, 3 do
+				if not n.Parent then return end
+				Tween(n, 0.05, { Position = UDim2.fromOffset(5, 0) })
+				task.wait(0.05)
+				Tween(n, 0.05, { Position = UDim2.fromOffset(-5, 0) })
+				task.wait(0.05)
+			end
+			Tween(n, 0.1, { Position = UDim2.new() })
+		end)
+	end
+
+	task.delay(duration, function()
+		if not n.Parent then return end
+		Tween(n, 0.3, { Position = UDim2.new(0, 350, 0, 0) }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		task.wait(0.3)
+		Tween(holder, 0.2, { Size = UDim2.new(1, 0, 0, 0) })
+		task.wait(0.2)
+		holder:Destroy()
+	end)
+end
+
+----------------------------------------------------------------------
+-- Settings-popup renderers (один на тип элемента)
+-- Каждый рисует строку и вешает el._refresh, чтобы el:Set() и SetTheme обновляли UI.
+----------------------------------------------------------------------
+local Renderers = {}
+local ROW_HEIGHT = { Toggle = 32, Slider = 44, Dropdown = 32, Color = 36, Keybind = 32, TextBox = 32, Group = 26 }
+
+local function Row(parent, height)
+	local r = Create("Frame", { Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = Library.Theme.Row, BorderSizePixel = 0 }, parent)
+	Corner(r, 6)
+	return r
+end
+
+local function RowLabel(row, text, props)
+	local p = { Size = UDim2.new(1, -120, 0, 20), Position = UDim2.fromOffset(10, 0), Text = text }
+	for k, v in pairs(props or {}) do
+		p[k] = v
+	end
+	return Label(row, p)
+end
+
+local function SmallButton(parent, width)
+	local b = Create("TextButton", {
+		Size = UDim2.fromOffset(width, 22), Position = UDim2.new(1, -(width + 10), 0.5, -11),
+		BackgroundColor3 = Library.Theme.Card, TextColor3 = Library.Theme.Text,
+		Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = true,
+	}, parent)
+	Corner(b, 4)
+	return b
+end
+
+Renderers.Toggle = function(el, parent)
+	local T = Library.Theme
+	local row = Row(parent, ROW_HEIGHT.Toggle)
+	RowLabel(row, el.Name, { Size = UDim2.new(1, -70, 1, 0) })
+	BindTooltip(row, el.Opts.Tooltip)
+	local sw = Create("TextButton", {
+		Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -48, 0.5, -10),
+		Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.fromRGB(60, 60, 70),
+	}, row)
+	Corner(sw, 10)
+	local knob = Create("Frame", {
+		Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, 3, 0.5, -7),
+		BackgroundColor3 = T.Text, BorderSizePixel = 0,
+	}, sw)
+	Corner(knob, 7)
+
+	local function refresh()
+		local on = el.Value
+		local TT = Library.Theme
+		Tween(sw, 0.15, { BackgroundColor3 = on and TT.ActiveBorder or Color3.fromRGB(60, 60, 70) })
+		Tween(knob, 0.15, { Position = on and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7), BackgroundColor3 = TT.Text })
+	end
+	sw.MouseButton1Click:Connect(function() el:Set(not el.Value) end)
+	el._refresh = refresh
+	refresh()
+end
+
+Renderers.Slider = function(el, parent, conns)
+	local T = Library.Theme
+	local o = el.Opts
+	local min, max, step = o.Min or 0, o.Max or 100, o.Increment or 1
+	local row = Row(parent, ROW_HEIGHT.Slider)
+	RowLabel(row, el.Name, { Size = UDim2.new(1, -80, 0, 22) })
+	BindTooltip(row, o.Tooltip)
+	local valueLbl = Label(row, {
+		Size = UDim2.fromOffset(70, 22), Position = UDim2.new(1, -80, 0, 0),
+		TextXAlignment = Enum.TextXAlignment.Right, TextColor3 = T.SubText,
+	})
+	local track = Create("Frame", {
+		Size = UDim2.new(1, -20, 0, 4), Position = UDim2.new(0, 10, 1, -13),
+		BackgroundColor3 = Color3.fromRGB(50, 50, 62), BorderSizePixel = 0,
+	}, row)
+	Corner(track, 2)
+	local fill = Create("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = T.ActiveBorder, BorderSizePixel = 0 }, track)
+	Corner(fill, 2)
+	local hit = Create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 24), Position = UDim2.new(0, 0, 1, -24), BackgroundTransparency = 1, Text = "",
+	}, row)
+
+	local function refresh()
+		local a = (max == min) and 0 or (el.Value - min) / (max - min)
+		fill.Size = UDim2.fromScale(math.clamp(a, 0, 1), 1)
+		fill.BackgroundColor3 = Library.Theme.ActiveBorder
+		valueLbl.Text = tostring(el.Value) .. (o.Suffix or "")
+	end
+	local function setFromX(x)
+		local a = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
+		local v = min + a * (max - min)
+		v = math.clamp(v, min, max)
+		-- округление к ближайшему шагу; math.floor(v/step + 0.5) корректно и для отрицательных v,
+		-- т.к. считаем от абсолютного значения шага, а не от знака v
+		v = math.floor(v / step + 0.5) * step
+		v = math.clamp(v, min, max)
+		v = tonumber(string.format("%.4f", v)) -- убираем погрешность float
+		if v ~= el.Value then
+			el:Set(v)
+		end
+	end
+
+	local dragging = false
+	hit.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			setFromX(input.Position.X)
+		end
+	end)
+	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			setFromX(input.Position.X)
+		end
+	end))
+	table.insert(conns, UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end))
+
+	el._refresh = refresh
+	refresh()
+end
+
+-- Настоящий выпадающий список: клик открывает панель поверх всего окна (не только popup),
+-- скролл если значений > 6, закрытие по клику вне списка/кнопки.
+Renderers.Dropdown = function(el, parent, conns, hostFrame)
+	local o = el.Opts
+	local values = o.Values or {}
+	local row = Row(parent, ROW_HEIGHT.Dropdown)
+	RowLabel(row, el.Name, { Size = UDim2.new(1, -130, 1, 0) })
+	BindTooltip(row, o.Tooltip)
+	local btn = SmallButton(row, 110)
+	btn.Text = tostring(el.Value)
+
+	local list, outsideConn
+
+	local function closeList()
+		if list then
+			list:Destroy()
+			list = nil
+		end
+		if outsideConn then
+			outsideConn:Disconnect()
+			outsideConn = nil
+		end
+	end
+
+	local function openList()
+		closeList()
+		if not hostFrame then
+			return
+		end
+		local T = Library.Theme
+		local itemH = 26
+		local visibleCount = math.max(1, math.min(#values, 6))
+		local listH = visibleCount * itemH + 4
+
+		local abs = btn.AbsolutePosition
+		local relX = abs.X - hostFrame.AbsolutePosition.X
+		local relY = abs.Y - hostFrame.AbsolutePosition.Y + btn.AbsoluteSize.Y + 2
+
+		-- клэмпим в пределах hostFrame, чтобы список не "улетал" и не резался за край
+		local bounds = hostFrame.AbsoluteSize
+		relX = math.clamp(relX, 0, math.max(bounds.X - 110, 0))
+		relY = math.clamp(relY, 0, math.max(bounds.Y - listH, 0))
+
+		list = Create("Frame", {
+			Size = UDim2.fromOffset(110, listH), Position = UDim2.fromOffset(relX, relY),
+			BackgroundColor3 = T.Popup, BorderSizePixel = 0, ZIndex = 250, ClipsDescendants = true, Active = true,
+		}, hostFrame)
+		Corner(list, 6)
+		Stroke(list, T.ActiveBorder, 1)
+
+		local scroll = Create("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 3, ScrollBarImageColor3 = T.Border, CanvasSize = UDim2.new(),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 251,
+		}, list)
+		Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+
+		for i, v in ipairs(values) do
+			local isSel = (v == el.Value)
+			local opt = Create("TextButton", {
+				Size = UDim2.new(1, 0, 0, itemH), BackgroundColor3 = T.ActiveBorder,
+				BackgroundTransparency = isSel and 0.6 or 1, Text = tostring(v), TextColor3 = T.Text,
+				Font = Enum.Font.Gotham, TextSize = 12, AutoButtonColor = false, LayoutOrder = i, ZIndex = 251,
+			}, scroll)
+			opt.MouseEnter:Connect(function() Tween(opt, 0.1, { BackgroundTransparency = 0.3 }) end)
+			opt.MouseLeave:Connect(function() Tween(opt, 0.1, { BackgroundTransparency = isSel and 0.6 or 1 }) end)
+			opt.MouseButton1Click:Connect(function()
+				el:Set(v)
+				closeList()
+			end)
+		end
+
+		task.defer(function()
+			outsideConn = UserInputService.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					local pos = input.Position
+					local inList, inBtn = false, false
+					if list then
+						local la, lb = list.AbsolutePosition, list.AbsoluteSize
+						inList = pos.X >= la.X and pos.X <= la.X + lb.X and pos.Y >= la.Y and pos.Y <= la.Y + lb.Y
+					end
+					local ba, bb = btn.AbsolutePosition, btn.AbsoluteSize
+					inBtn = pos.X >= ba.X and pos.X <= ba.X + bb.X and pos.Y >= ba.Y and pos.Y <= ba.Y + bb.Y
+					if not inList and not inBtn then
+						closeList()
+					end
+				end
+			end)
+		end)
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		if list then closeList() else openList() end
+	end)
+
+	local function refresh()
+		btn.Text = tostring(el.Value)
+	end
+	el._refresh = refresh
+	el._closeDropdown = closeList
+	refresh()
+end
+
+Renderers.Color = function(el, parent)
+	local T = Library.Theme
+	local row = Row(parent, ROW_HEIGHT.Color)
+	RowLabel(row, el.Name, { Size = UDim2.new(1, -190, 1, 0) })
+	BindTooltip(row, el.Opts.Tooltip)
+	local preview = Create("Frame", {
+		Size = UDim2.fromOffset(22, 22), Position = UDim2.new(1, -176, 0.5, -11),
+		BackgroundColor3 = el.Value, BorderSizePixel = 0,
+	}, row)
+	Corner(preview, 4)
+
+	local boxes = {}
+	for i = 1, 3 do
+		boxes[i] = Create("TextBox", {
+			Size = UDim2.fromOffset(42, 24), Position = UDim2.new(1, -148 + (i - 1) * 48, 0.5, -12),
+			BackgroundColor3 = Color3.fromRGB(50, 50, 50), TextColor3 = T.Text, PlaceholderText = ({ "R", "G", "B" })[i],
+			Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false, Text = "0",
+		}, row)
+		Corner(boxes[i], 4)
+		boxes[i].FocusLost:Connect(function()
+			local r = math.clamp(tonumber(boxes[1].Text) or 0, 0, 255)
+			local g = math.clamp(tonumber(boxes[2].Text) or 0, 0, 255)
+			local b = math.clamp(tonumber(boxes[3].Text) or 0, 0, 255)
+			el:Set(Color3.fromRGB(r, g, b))
+		end)
+	end
+
+	local function refresh()
+		local c = el.Value
+		preview.BackgroundColor3 = c
+		boxes[1].Text = tostring(math.floor(c.R * 255 + 0.5))
+		boxes[2].Text = tostring(math.floor(c.G * 255 + 0.5))
+		boxes[3].Text = tostring(math.floor(c.B * 255 + 0.5))
+	end
+	el._refresh = refresh
+	refresh()
+end
+
+Renderers.Keybind = function(el, parent)
+	local row = Row(parent, ROW_HEIGHT.Keybind)
+	RowLabel(row, el.Name, { Size = UDim2.new(1, -110, 1, 0) })
+	BindTooltip(row, el.Opts.Tooltip)
+	local btn = SmallButton(row, 90)
+	local function refresh()
+		btn.Text = el.Value and el.Value.Name or "None"
+	end
+	btn.MouseButton1Click:Connect(function()
+		btn.Text = "..."
+		Library:_listenKey(function(key) el:Set(key) end)
+	end)
+	el._refresh = refresh
+	refresh()
+end
+
+-- Простое текстовое поле. opts.Numeric = true ограничивает ввод числом (с опц. Min/Max).
+Renderers.TextBox = function(el, parent)
+	local T = Library.Theme
+	local o = el.Opts
+	local row = Row(parent, ROW_HEIGHT.TextBox)
+	RowLabel(row, el.Name, { Size = UDim2.new(1, -140, 1, 0) })
+	BindTooltip(row, o.Tooltip)
+
+	local box = Create("TextBox", {
+		Size = UDim2.fromOffset(120, 24), Position = UDim2.new(1, -132, 0.5, -12),
+		BackgroundColor3 = Color3.fromRGB(50, 50, 50), TextColor3 = T.Text,
+		PlaceholderText = o.Placeholder or "", PlaceholderColor3 = T.SubText,
+		Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false,
+		Text = tostring(el.Value or ""), TextXAlignment = Enum.TextXAlignment.Left,
+		ClipsDescendants = true,
+	}, row)
+	Corner(box, 4)
+	Create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, box)
+
+	local function refresh()
+		if not box:IsFocused() then
+			box.Text = tostring(el.Value or "")
+		end
+	end
+
+	box.FocusLost:Connect(function(enterPressed)
+		local text = box.Text
+		if o.Numeric then
+			local n = tonumber(text)
+			if not n then
+				box.Text = tostring(el.Value or "")
+				return
+			end
+			if o.Min then n = math.max(n, o.Min) end
+			if o.Max then n = math.min(n, o.Max) end
+			el:Set(n)
+		else
+			el:Set(text)
+		end
+	end)
+
+	el._refresh = refresh
+	refresh()
+end
+
+-- Сворачиваемая группа: рисует заголовок со стрелкой + вложенный контейнер с дочерними элементами.
+-- Рекурсивно поддерживает вложенные группы.
+local function RenderElement(el, container, conns, hostFrame)
+	if el.Type == "Group" then
+		local header = Row(container, ROW_HEIGHT.Group)
+		local arrow = Label(header, {
+			Size = UDim2.fromOffset(20, ROW_HEIGHT.Group), Position = UDim2.fromOffset(4, 0),
+			Text = el.Collapsed and "▸" or "▾", Font = Enum.Font.GothamBold, TextSize = 12,
+		})
+		RowLabel(header, el.Name, { Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(26, 0), Font = Enum.Font.GothamBold })
+
+		local body = Create("Frame", {
+			Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
+			AutomaticSize = Enum.AutomaticSize.Y, Visible = not el.Collapsed, ClipsDescendants = true,
+		}, container)
+		Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, body)
+		Create("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 4) }, body)
+
+		for _, child in ipairs(el.Elements) do
+			RenderElement(child, body, conns, hostFrame)
+		end
+
+		local click = Create("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 5 }, header)
+		click.MouseButton1Click:Connect(function()
+			el.Collapsed = not el.Collapsed
+			body.Visible = not el.Collapsed
+			arrow.Text = el.Collapsed and "▸" or "▾"
+		end)
+	else
+		local render = Renderers[el.Type]
+		if render then
+			render(el, container, conns, hostFrame)
+		end
+	end
+end
+
+local function MeasureElements(elements)
+	local h = 0
+	for _, el in ipairs(elements) do
+		if el.Type == "Group" then
+			h += ROW_HEIGHT.Group + 8
+			if not el.Collapsed then
+				h += MeasureElements(el.Elements) -- грубая оценка (не критично — есть скролл)
+			end
+		else
+			h += (ROW_HEIGHT[el.Type] or 30) + 8
+		end
+	end
+	return h
+end
+
+local function ClearRefreshRecursive(elements)
+	for _, el in ipairs(elements) do
+		if el._closeDropdown then pcall(el._closeDropdown) end
+		el._refresh = nil
+		if el.Type == "Group" then
+			ClearRefreshRecursive(el.Elements)
+		end
+	end
+end
+
+----------------------------------------------------------------------
+-- Window
+----------------------------------------------------------------------
+function Library:CreateWindow(cfg)
+	cfg = cfg or {}
+	local T = self.Theme
+	self:_init()
+
+	local Window = {
+		Tabs = {}, TabList = {}, Current = nil, Minimized = false, Visible = true,
+		ToggleKey = cfg.ToggleKey or Enum.KeyCode.RightControl,
+		NotifyOnToggle = cfg.NotifyOnToggle ~= false,
+	}
+	local order = 0
+	local function nextOrder() order += 1 return order end
+	local size = cfg.Size or Vector2.new(800, 520)
+
+	local gui = Create("ScreenGui", {
+		Name = cfg.Name or "CelestialUI", ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999,
+	})
+	ProtectGui(gui)
+	Window.Gui = gui
+
+	-- Главное окно: AnchorPoint по центру, поэтому анимация открытия = просто твин размера
+	local main = Create("Frame", {
+		Name = "Main", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ClipsDescendants = true,
+	}, gui)
+	Corner(main, 10)
+	local mainStroke = Stroke(main, T.Border, 1)
+	local bgGrad = Create("UIGradient", {
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, T.Background),
+			ColorSequenceKeypoint.new(0.5, T.BackgroundAlt),
+			ColorSequenceKeypoint.new(1, T.Background),
+		}),
+	}, main)
+	Loop(bgGrad, 8, { Rotation = 360 })
+	Tween(main, 0.5, { Size = UDim2.fromOffset(size.X, size.Y), BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
+	Window.Main = main
+	Window.MainStroke = mainStroke
+	Window.BgGrad = bgGrad
+
+	-- Overlay: отдельный слой поверх main (создан позже main => рендерится сверху, как сиблинг в gui).
+	-- Здесь живут блокер кликов, попапы настроек/конфигов/друзей и списки дропдаунов —
+	-- у main стоит ClipsDescendants = true, из-за чего всё вышеперечисленное резалось/пропадало
+	-- на краю окна. На overlay такого ограничения нет, поэтому попапы можно таскать
+	-- в любое место экрана, и они никогда не "срезаются".
+	local overlay = Create("Frame", {
+		Name = "Overlay", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+	}, gui)
+	Window.Overlay = overlay
+
+	-- Sidebar
+	local sidebar = Create("Frame", { Name = "Sidebar", Size = UDim2.new(0, 160, 1, 0), BackgroundColor3 = T.Sidebar, BorderSizePixel = 0 }, main)
+	Corner(sidebar, 10)
+	Window.Sidebar = sidebar
+
+	local logoFrame = Create("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1 }, sidebar)
+	local logoBg = Create("Frame", {
+		Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(14, 9),
+		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+	}, logoFrame)
+	Corner(logoBg, 8)
+	Create("UIGradient", {
+		Rotation = 45,
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromHex("#6a1c97")),
+			ColorSequenceKeypoint.new(0.5, Color3.fromHex("#7b2cbf")),
+			ColorSequenceKeypoint.new(1, Color3.fromHex("#9d4edd")),
+		}),
+	}, logoBg) -- лого намеренно остаётся фирменным цветом независимо от темы
+	local logoId = cfg.Logo or self.Icons.Logo
+	if logoId and logoId ~= "" then
+		Create("ImageLabel", {
+			Size = UDim2.new(1, -6, 1, -6), Position = UDim2.fromOffset(3, 3), BackgroundTransparency = 1,
+			Image = logoId, ScaleType = Enum.ScaleType.Fit,
+		}, logoBg)
+	end
+	Label(logoFrame, {
+		Size = UDim2.new(1, -56, 0, 32), Position = UDim2.fromOffset(52, 9), Text = cfg.Title or "Celestial",
+		Font = Enum.Font.GothamBold, TextSize = 18,
+	})
+
+	local sidebarContent = Create("Frame", {
+		Size = UDim2.new(1, 0, 1, -55), Position = UDim2.fromOffset(0, 50), BackgroundTransparency = 1,
+	}, sidebar)
+	Create("UIListLayout", {
+		Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+	}, sidebarContent)
+	Create("UIPadding", { PaddingTop = UDim.new(0, 4) }, sidebarContent)
+
+	-- Topbar
+	local topbar = Create("Frame", {
+		Name = "Topbar", Size = UDim2.new(1, -160, 0, 45), Position = UDim2.fromOffset(160, 0),
+		BackgroundColor3 = T.Topbar, BorderSizePixel = 0,
+	}, main)
+	Window.Topbar = topbar
+
+	local searchFrame = Create("Frame", {
+		Size = UDim2.fromOffset(240, 28), Position = UDim2.new(0, 15, 0.5, -14),
+		BackgroundColor3 = Color3.fromRGB(20, 20, 28), BorderSizePixel = 0,
+	}, topbar)
+	Corner(searchFrame, 6)
+	local textX = 10
+	if self.Icons.Search ~= "" then
+		Create("ImageLabel", {
+			Size = UDim2.fromOffset(16, 16), Position = UDim2.new(0, 10, 0.5, -8), BackgroundTransparency = 1,
+			Image = self.Icons.Search, ImageColor3 = T.SubText, ScaleType = Enum.ScaleType.Fit,
+		}, searchFrame)
+		textX = 34
+	end
+	local searchBox = Create("TextBox", {
+		Name = "Search", Size = UDim2.new(1, -(textX + 4), 1, 0), Position = UDim2.fromOffset(textX, 0),
+		BackgroundTransparency = 1, Text = "", PlaceholderText = cfg.SearchPlaceholder or "Поиск",
+		TextColor3 = T.Text, PlaceholderColor3 = T.SubText, Font = Enum.Font.Gotham, TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false,
+	}, searchFrame)
+
+	local topRight = Create("Frame", {
+		Size = UDim2.new(0, 200, 1, 0), Position = UDim2.new(1, -215, 0, 0), BackgroundTransparency = 1,
+	}, topbar)
+	Create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder,
+	}, topRight)
+
+	local contentFrame = Create("Frame", {
+		Name = "Content", Size = UDim2.new(1, -160, 1, -45), Position = UDim2.fromOffset(160, 45),
+		BackgroundTransparency = 1, ClipsDescendants = true,
+	}, main)
+
+	------------------------------------------------------------------
+	-- Блокировщик клика по фону, пока открыт попап
+	-- (чтобы карточки фич за попапом не тыкались и не переключались случайно)
+	------------------------------------------------------------------
+	function Window:_addBlocker(zindex)
+		self:_removeBlocker()
+		local b = Create("TextButton", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
+			AutoButtonColor = false, ZIndex = zindex or 90, Active = true,
+		}, overlay)
+		b.MouseButton1Click:Connect(function()
+			self:ClosePopup()
+			self:CloseConfigPopup()
+			self:CloseFriendPopup()
+            self:CloseThemePopup()
+		end)
+		self._blocker = b
+	end
+	function Window:_removeBlocker()
+		if self._blocker then
+			self._blocker:Destroy()
+			self._blocker = nil
+		end
+	end
+
+	-- Позиция по центру текущего положения окна (main может быть уже подвинут пользователем),
+	-- в системе координат overlay (обычно та же, что у main, т.к. overlay = полный экран без смещения).
+	local function centerOverMain()
+		return UDim2.fromOffset(
+			main.AbsolutePosition.X + main.AbsoluteSize.X / 2 - overlay.AbsolutePosition.X,
+			main.AbsolutePosition.Y + main.AbsoluteSize.Y / 2 - overlay.AbsolutePosition.Y
+		)
+	end
+	local function overlayBounds()
+		return overlay.AbsoluteSize
+	end
+
+	------------------------------------------------------------------
+	-- Popup настроек фичи
+	------------------------------------------------------------------
+	local popup, popupFeature, popupConns = nil, nil, {}
+
+	function Window:ClosePopup()
+		if not popup then
+			self:_removeBlocker()
+			return
+		end
+		local p = popup
+		popup = nil
+		for _, c in ipairs(popupConns) do
+			c:Disconnect()
+		end
+		popupConns = {}
+		if popupFeature then
+			ClearRefreshRecursive(popupFeature.Elements)
+		end
+		popupFeature = nil
+		self._popupFrame = nil
+		self:_removeBlocker()
+		Tween(p, 0.15, { Size = UDim2.fromOffset(280, 0), BackgroundTransparency = 1 })
+		task.delay(0.15, function() p:Destroy() end)
+	end
+
+	function Window:OpenPopup(feature)
+		local same = (popupFeature == feature)
+		self:ClosePopup()
+		self:CloseConfigPopup()
+		self:CloseFriendPopup()
+        self:CloseThemePopup()
+		if same or #feature.Elements == 0 then
+			return
+		end
+
+		local height = math.min(MeasureElements(feature.Elements) + 56, 380)
+
+		self:_addBlocker(90)
+
+		local p = Create("Frame", {
+			Name = feature.Name .. "_Settings", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
+			Size = UDim2.fromOffset(280, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
+		}, overlay)
+		Corner(p, 8)
+		Stroke(p, T.ActiveBorder, 1)
+
+		-- заголовок — за него попап можно таскать в любое место экрана (не резается и не пропадает)
+		local header = Create("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Active = true }, p)
+		Label(header, {
+			Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(14, 0),
+			Text = feature.Name .. " — Настройки", Font = Enum.Font.GothamBold, TextSize = 14,
+		})
+		local close = Create("TextButton", {
+			Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 4), BackgroundColor3 = Color3.fromRGB(80, 25, 25),
+			Text = "X", TextColor3 = T.Text, Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 5,
+		}, header)
+		Corner(close, 5)
+		close.MouseButton1Click:Connect(function() self:ClosePopup() end)
+		MakeDraggable(header, p, overlayBounds)
+
+		local list = Create("ScrollingFrame", {
+			Size = UDim2.new(1, -24, 1, -50), Position = UDim2.fromOffset(12, 44), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Border,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, p)
+		Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+
+		for _, el in ipairs(feature.Elements) do
+			RenderElement(el, list, popupConns, overlay)
+		end
+
+		popup, popupFeature = p, feature
+		self._popupFrame = p
+		Tween(p, 0.2, { Size = UDim2.fromOffset(280, height), BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
+	end
+
+	------------------------------------------------------------------
+	-- Попап конфигов (📁 -> Save / Load / Delete)
+	------------------------------------------------------------------
+	local configPopup, configConns = nil, {}
+
+	function Window:CloseConfigPopup()
+		if not configPopup then
+			self:_removeBlocker()
+			return
+		end
+		local p = configPopup
+		configPopup = nil
+		for _, c in ipairs(configConns) do
+			c:Disconnect()
+		end
+		configConns = {}
+		self._configFrame = nil
+		self:_removeBlocker()
+		Tween(p, 0.15, { Size = UDim2.fromOffset(260, 0), BackgroundTransparency = 1 })
+		task.delay(0.15, function() p:Destroy() end)
+	end
+
+	function Window:OpenConfigPopup()
+		if configPopup then
+			self:CloseConfigPopup()
+			return
+		end
+		self:ClosePopup()
+		self:CloseFriendPopup()
+        self:CloseThemePopup()
+		self:_addBlocker(90)
+
+		local p = Create("Frame", {
+			Name = "ConfigPopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
+			Size = UDim2.fromOffset(260, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
+		}, overlay)
+		Corner(p, 8)
+		Stroke(p, T.ActiveBorder, 1)
+
+		local header = Create("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Active = true }, p)
+		Label(header, {
+			Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(14, 0),
+			Text = "Конфиги", Font = Enum.Font.GothamBold, TextSize = 14,
+		})
+		local close = Create("TextButton", {
+			Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 4), BackgroundColor3 = Color3.fromRGB(80, 25, 25),
+			Text = "X", TextColor3 = T.Text, Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 5,
+		}, header)
+		Corner(close, 5)
+		close.MouseButton1Click:Connect(function() self:CloseConfigPopup() end)
+		MakeDraggable(header, p, overlayBounds)
+
+		-- строка сохранения: имя + кнопка Save
+		local saveRow = Create("Frame", {
+			Size = UDim2.new(1, -24, 0, 32), Position = UDim2.fromOffset(12, 44),
+			BackgroundColor3 = T.Row, BorderSizePixel = 0,
+		}, p)
+		Corner(saveRow, 6)
+		local nameBox = Create("TextBox", {
+			Size = UDim2.new(1, -76, 1, -6), Position = UDim2.fromOffset(8, 3),
+			BackgroundColor3 = Color3.fromRGB(50, 50, 50), TextColor3 = T.Text,
+			PlaceholderText = "Имя конфига", PlaceholderColor3 = T.SubText,
+			Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false, Text = "",
+		}, saveRow)
+		Corner(nameBox, 4)
+		local saveBtn = SmallButton(saveRow, 60)
+		saveBtn.Text = "Save"
+
+		local list = Create("ScrollingFrame", {
+			Size = UDim2.new(1, -24, 1, -86), Position = UDim2.fromOffset(12, 82), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Border,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, p)
+		Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+
+		local function resize()
+			local count = #Library:ListConfigs()
+			local height = math.min(86 + count * 36 + 10, 320)
+			Tween(p, 0.15, { Size = UDim2.fromOffset(260, height) })
+		end
+
+		local function refreshList()
+			list:ClearAllChildren()
+			Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+			for _, cname in ipairs(Library:ListConfigs()) do
+				local row = Row(list, 30)
+				RowLabel(row, cname, { Size = UDim2.new(1, -140, 1, 0) })
+				local loadBtn = SmallButton(row, 55)
+				loadBtn.Text = "Load"
+				loadBtn.Position = UDim2.new(1, -125, 0.5, -11)
+				local delBtn = SmallButton(row, 55)
+				delBtn.Text = "Delete"
+				delBtn.BackgroundColor3 = Color3.fromRGB(80, 25, 25)
+
+				loadBtn.MouseButton1Click:Connect(function()
+					local ok, err = Library:LoadConfig(cname)
+					Library:Notify({
+						Title = ok and ("Загружено: " .. cname) or "Ошибка загрузки",
+						Text = ok and "" or tostring(err), Type = ok and "success" or "error",
+					})
+				end)
+				delBtn.MouseButton1Click:Connect(function()
+					if delfile and isfile then
+						local path = Library.ConfigFolder .. "/" .. cname .. ".json"
+						if isfile(path) then
+							delfile(path)
+							refreshList()
+							resize()
+							Library:Notify({ Title = "Удалено: " .. cname, Type = "info" })
+						end
+					else
+						Library:Notify({ Title = "delfile недоступен", Type = "error" })
+					end
+				end)
+			end
+			resize()
+		end
+
+		saveBtn.MouseButton1Click:Connect(function()
+			local cname = nameBox.Text
+			if cname == "" then
+				Library:Notify({ Title = "Введи имя конфига", Type = "error" })
+				return
+			end
+			local ok, err = Library:SaveConfig(cname)
+			Library:Notify({
+				Title = ok and ("Сохранено: " .. cname) or "Ошибка сохранения",
+				Text = ok and "" or tostring(err), Type = ok and "success" or "error",
+			})
+			nameBox.Text = ""
+			refreshList()
+		end)
+
+		configPopup = p
+		self._configFrame = p
+		refreshList()
+		Tween(p, 0.2, { BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
+	end
+
+	------------------------------------------------------------------
+	-- Попап друзей (Library.FriendList — общий на весь модуль, не привязан к окну)
+	------------------------------------------------------------------
+	local friendPopup, friendConns = nil, {}
+
+	function Window:CloseFriendPopup()
+		if not friendPopup then
+			self:_removeBlocker()
+			return
+		end
+		local p = friendPopup
+		friendPopup = nil
+		for _, c in ipairs(friendConns) do
+			c:Disconnect()
+		end
+		friendConns = {}
+		self._friendFrame = nil
+		self:_removeBlocker()
+		Tween(p, 0.15, { Size = UDim2.fromOffset(260, 0), BackgroundTransparency = 1 })
+		task.delay(0.15, function() p:Destroy() end)
+	end
+
+	function Window:OpenFriendPopup()
+		if friendPopup then
+			self:CloseFriendPopup()
+			return
+		end
+		self:ClosePopup()
+        self:CloseConfigPopup()
+        self:CloseThemePopup()
+		self:_addBlocker(90)
+
+		local p = Create("Frame", {
+			Name = "FriendPopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
+			Size = UDim2.fromOffset(260, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
+		}, overlay)
+		Corner(p, 8)
+		Stroke(p, T.ActiveBorder, 1)
+
+		local header = Create("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Active = true }, p)
+		Label(header, {
+			Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(14, 0),
+			Text = "Друзья", Font = Enum.Font.GothamBold, TextSize = 14,
+		})
+		local close = Create("TextButton", {
+			Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 4), BackgroundColor3 = Color3.fromRGB(80, 25, 25),
+			Text = "X", TextColor3 = T.Text, Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 5,
+		}, header)
+		Corner(close, 5)
+		close.MouseButton1Click:Connect(function() self:CloseFriendPopup() end)
+		MakeDraggable(header, p, overlayBounds)
+
+		local addRow = Create("Frame", {
+			Size = UDim2.new(1, -24, 0, 32), Position = UDim2.fromOffset(12, 44),
+			BackgroundColor3 = T.Row, BorderSizePixel = 0,
+		}, p)
+		Corner(addRow, 6)
+		local nameBox = Create("TextBox", {
+			Size = UDim2.new(1, -76, 1, -6), Position = UDim2.fromOffset(8, 3),
+			BackgroundColor3 = Color3.fromRGB(50, 50, 50), TextColor3 = T.Text,
+			PlaceholderText = "Имя игрока...", PlaceholderColor3 = T.SubText,
+			Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false, Text = "",
+		}, addRow)
+		Corner(nameBox, 4)
+		local addBtn = SmallButton(addRow, 60)
+		addBtn.Text = "+ Add"
+
+		local list = Create("ScrollingFrame", {
+			Size = UDim2.new(1, -24, 1, -86), Position = UDim2.fromOffset(12, 82), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Border,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, p)
+		Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+
+		local function resize()
+			local count = #Library.FriendList
+			local height = math.min(86 + count * 36 + 10, 320)
+			Tween(p, 0.15, { Size = UDim2.fromOffset(260, height) })
+		end
+
+		local function refreshList()
+			list:ClearAllChildren()
+			Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+			for _, fname in ipairs(Library.FriendList) do
+				local row = Row(list, 30)
+				RowLabel(row, fname, { Size = UDim2.new(1, -46, 1, 0) })
+				local rm = Create("TextButton", {
+					Size = UDim2.fromOffset(24, 24), Position = UDim2.new(1, -32, 0.5, -12),
+					BackgroundColor3 = Color3.fromRGB(80, 25, 25), Text = "×",
+					TextColor3 = T.Text, Font = Enum.Font.GothamBold, TextSize = 14,
+				}, row)
+				Corner(rm, 5)
+				rm.MouseButton1Click:Connect(function()
+					Library:RemoveFriend(fname)
+					refreshList()
+					resize()
+				end)
+			end
+			resize()
+		end
+
+		local function tryAdd()
+			local n = nameBox.Text
+			if n == "" then
+				Library:Notify({ Title = "Введи имя игрока", Type = "error" })
+				return
+			end
+			if Library:AddFriend(n) then
+				nameBox.Text = ""
+				refreshList()
+			else
+				Library:Notify({ Title = "Уже в списке", Type = "info" })
+			end
+		end
+		addBtn.MouseButton1Click:Connect(tryAdd)
+		nameBox.FocusLost:Connect(function(enter) if enter then tryAdd() end end)
+
+		friendPopup = p
+		self._friendFrame = p
+		refreshList()
+		Tween(p, 0.2, { BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
+	end
+    	------------------------------------------------------------------
+	-- Попап выбора темы
+	------------------------------------------------------------------
+	local themePopup, themeConns = nil, {}
+
+	function Window:CloseThemePopup()
+		if not themePopup then
+			self:_removeBlocker()
+			return
+		end
+		local p = themePopup
+		themePopup = nil
+		for _, c in ipairs(themeConns) do
+			c:Disconnect()
+		end
+		themeConns = {}
+		self._themeFrame = nil
+		self:_removeBlocker()
+		Tween(p, 0.15, { Size = UDim2.fromOffset(240, 0), BackgroundTransparency = 1 })
+		task.delay(0.15, function() p:Destroy() end)
+	end
+
+	function Window:OpenThemePopup()
+		if themePopup then
+			self:CloseThemePopup()
+			return
+		end
+		self:ClosePopup()
+		self:CloseConfigPopup()
+		self:CloseFriendPopup()
+        self:CloseThemePopup()
+		self:_addBlocker(90)
+
+		local p = Create("Frame", {
+			Name = "ThemePopup", AnchorPoint = Vector2.new(0.5, 0.5), Position = centerOverMain(),
+			Size = UDim2.fromOffset(240, 0), BackgroundColor3 = T.Popup, BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 100, ClipsDescendants = true, Active = true,
+		}, overlay)
+		Corner(p, 8)
+		Stroke(p, T.ActiveBorder, 1)
+
+		local header = Create("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Active = true }, p)
+		Label(header, {
+			Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(14, 0),
+			Text = "Тема оформления", Font = Enum.Font.GothamBold, TextSize = 14,
+		})
+		local close = Create("TextButton", {
+			Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 4), BackgroundColor3 = Color3.fromRGB(80, 25, 25),
+			Text = "X", TextColor3 = T.Text, Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 5,
+		}, header)
+		Corner(close, 5)
+		close.MouseButton1Click:Connect(function() self:CloseThemePopup() end)
+		MakeDraggable(header, p, overlayBounds)
+
+		local list = Create("Frame", {
+			Size = UDim2.new(1, -24, 0, 0), Position = UDim2.fromOffset(12, 44),
+			BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y,
+		}, p)
+		Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+
+		-- список тем — идём по Library.Themes, чтобы автоматически поддерживать любые новые
+		local order = 0
+		local themeRows = {}
+		local function refreshRows()
+			for name, rowData in pairs(themeRows) do
+				local isCurrent = (Library.ThemeName == name)
+				rowData.row.BackgroundColor3 = isCurrent and Library.Theme.ActiveBorder or Library.Theme.Row
+				rowData.label.TextColor3 = isCurrent and Library.Theme.Text or Library.Theme.SubText
+			end
+		end
+
+		local themeOrder = { "Celestial", "PurpleNight", "Cosmos" }
+		for _, themeName in ipairs(themeOrder) do
+			if not Library.Themes[themeName] then continue end
+			order += 1
+			local row = Row(list, 32)
+			row.LayoutOrder = order
+			local label = RowLabel(row, themeName, { Size = UDim2.new(1, -20, 1, 0) })
+			local btn = Create("TextButton", {
+				Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 5,
+			}, row)
+			btn.MouseButton1Click:Connect(function()
+				Library:SetTheme(themeName)
+				refreshRows()
+			end)
+			themeRows[themeName] = { row = row, label = label }
+		end
+		refreshRows()
+
+		themePopup = p
+		self._themeFrame = p
+		local h = 44 + order * 38 + 12
+		Tween(p, 0.2, { Size = UDim2.fromOffset(240, h), BackgroundTransparency = 0 }, Enum.EasingStyle.Back)
+	end
+
+	------------------------------------------------------------------
+	-- Кнопки топбара / драг окна
+	------------------------------------------------------------------
+	function Window:AddTopButton(iconId, glyph, callback)
+		local btn = IconButton(topRight, iconId, glyph, 20)
+		btn.LayoutOrder = nextOrder()
+		btn.MouseButton1Click:Connect(function() Fire(callback) end)
+		return btn
+	end
+
+	function Window:SetMinimized(state)
+		Window.Minimized = state
+		Window:ClosePopup()
+        Window:CloseConfigPopup()
+        Window:CloseFriendPopup()
+        Window:CloseThemePopup()
+		Tween(main, 0.35, { Size = UDim2.fromOffset(size.X, state and 45 or size.Y) })
+	end
+
+	-- кнопка-папка: открывает Save/Load/Delete конфигов
+	Window:AddTopButton(self.Icons.Config, "Cfg", function() Window:OpenConfigPopup() end)
+	-- кнопка друзей
+	Window:AddTopButton(self.Icons.Friends, "♥", function() Window:OpenFriendPopup() end)
+
+    Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
+	Window:OpenThemePopup()
+end)
+
+	-- Анимация показа/скрытия окна (скейл + фейд, туда — Back Out, обратно — Back In)
+	local visTween
+	function Window:SetVisible(state)
+		if state == Window.Visible then
+			return
+		end
+		Window.Visible = state
+		if visTween then
+			visTween:Cancel()
+			visTween = nil
+		end
+		Window:ClosePopup()
+		Window:CloseConfigPopup()
+		Window:CloseFriendPopup()
+        Window:CloseThemePopup()
+
+		local targetH = Window.Minimized and 45 or size.Y
+
+		if state then
+			main.Visible = true
+			main.Size = UDim2.new()
+			main.BackgroundTransparency = 1
+			visTween = Tween(main, 0.35, { Size = UDim2.fromOffset(size.X, targetH), BackgroundTransparency = 0 }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		else
+			visTween = Tween(main, 0.25, { Size = UDim2.new(), BackgroundTransparency = 1 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+			visTween.Completed:Connect(function()
+				if not Window.Visible then
+					main.Visible = false
+				end
+			end)
+		end
+	end
+	function Window:Toggle() Window:SetVisible(not Window.Visible) end
+
+	-- Перетаскивание окна с ограничением в пределах экрана, чтобы окно нельзя было утащить за край
+	local dragging, dragStart, startPos = false, nil, nil
+	local function makeHandle(handle)
+		handle.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				-- переводим текущую позицию в чистый Offset от левого верхнего угла,
+				-- чтобы клампить было просто (независимо от AnchorPoint/Scale)
+				startPos = UDim2.fromOffset(main.AbsolutePosition.X, main.AbsolutePosition.Y)
+			end
+		end)
+		handle.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
+			end
+		end)
+	end
+	makeHandle(topbar)
+	makeHandle(logoFrame)
+	Connect(UserInputService.InputChanged, function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			local w, h = main.AbsoluteSize.X, main.AbsoluteSize.Y
+			local screen = gui.AbsoluteSize -- размер экрана, который покрывает ScreenGui
+
+			-- целевой левый верхний угол окна
+			local newX = startPos.X.Offset + d.X
+			local newY = startPos.Y.Offset + d.Y
+
+			-- клампим так, чтобы окно целиком оставалось в пределах видимой области
+			newX = math.clamp(newX, 0, math.max(screen.X - w, 0))
+			newY = math.clamp(newY, 0, math.max(screen.Y - h, 0))
+
+			-- у main AnchorPoint = (0.5, 0.5), поэтому переводим левый-верхний угол обратно в координаты центра
+			main.Position = UDim2.fromOffset(newX + w / 2, newY + h / 2)
+		end
+	end)
+
+	------------------------------------------------------------------
+	-- Sidebar: кнопки и вкладки
+	------------------------------------------------------------------
+	local function makeSidebarButton(name, icon, glyph, iconSize)
+		iconSize = iconSize or 18
+		local btn = Create("TextButton", {
+			Name = name, Size = UDim2.new(1, -16, 0, 34), BackgroundColor3 = T.Card, BackgroundTransparency = 1,
+			Text = "", AutoButtonColor = false, LayoutOrder = nextOrder(),
+		}, sidebarContent)
+		Corner(btn, 8)
+		local indicator = Create("Frame", {
+			Size = UDim2.fromOffset(3, 16), Position = UDim2.new(0, 0, 0.5, -8),
+			BackgroundColor3 = Library.Theme.ActiveBorder, BackgroundTransparency = 1, BorderSizePixel = 0,
+		}, btn)
+		Corner(indicator, 2)
+
+		local x = 12
+		local iconObj
+		if icon and icon ~= "" then
+			iconObj = Create("ImageLabel", {
+				Size = UDim2.fromOffset(iconSize, iconSize), Position = UDim2.new(0, 12, 0.5, -iconSize / 2), BackgroundTransparency = 1,
+				Image = icon, ImageColor3 = Library.Theme.Inactive, ScaleType = Enum.ScaleType.Fit,
+			}, btn)
+			x = 12 + iconSize + 8
+		end
+		local text = Label(btn, {
+			Size = UDim2.new(1, -(x + 6), 1, 0), Position = UDim2.fromOffset(x, 0), Text = name,
+			Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Library.Theme.Inactive,
+		})
+
+		local selected = false
+		local function setSelected(sel)
+			selected = sel
+			local TT = Library.Theme
+			Tween(btn, 0.2, { BackgroundTransparency = sel and 0 or 1, BackgroundColor3 = TT.Card })
+			Tween(indicator, 0.2, { BackgroundTransparency = sel and 0 or 1, BackgroundColor3 = TT.ActiveBorder })
+			Tween(text, 0.2, { TextColor3 = sel and TT.Text or TT.Inactive })
+			if iconObj then
+				Tween(iconObj, 0.2, { ImageColor3 = sel and TT.ActiveBorder or TT.Inactive })
+			end
+		end
+		btn.MouseEnter:Connect(function()
+			if not selected then Tween(text, 0.15, { TextColor3 = Library.Theme.Text }) end
+		end)
+		btn.MouseLeave:Connect(function()
+			if not selected then Tween(text, 0.15, { TextColor3 = Library.Theme.Inactive }) end
+		end)
+		return btn, setSelected
+	end
+
+	function Window:AddSeparator(text)
+		Label(sidebarContent, {
+			Size = UDim2.new(1, -24, 0, 22), Text = string.upper(text), Font = Enum.Font.GothamBold,
+			TextSize = 10, TextColor3 = T.SubText, LayoutOrder = nextOrder(),
+		})
+	end
+
+	-- Кнопка в сайдбаре без вкладки (например "Выйти"). iconSize необязателен (по умолчанию 24, крупнее вкладок)
+	function Window:AddSidebarButton(name, icon, callback, iconSize)
+		local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
+		btn.MouseButton1Click:Connect(function() Fire(callback) end)
+		return btn
+	end
+
+	function Window:SelectTab(tab)
+		if type(tab) == "string" then
+			tab = Window.Tabs[tab]
+		end
+		if not tab or Window.Current == tab then
+			return
+		end
+		Window:ClosePopup()
+		Window:CloseConfigPopup()
+		Window:CloseFriendPopup()
+        Window:CloseThemePopup()
+		if Window.Current then
+			Window.Current._setSelected(false)
+			Window.Current.Scroll.Visible = false
+		end
+		Window.Current = tab
+		tab._setSelected(true)
+		tab.Scroll.Position = UDim2.fromOffset(15, 28)
+		tab.Scroll.Visible = true
+		Tween(tab.Scroll, 0.25, { Position = UDim2.fromOffset(15, 10) })
+		Window:_applySearch()
+	end
+
+	-- Поиск ищет по всем вкладкам; если совпадений на текущей нет, а на другой есть — переключается сама.
+	function Window:_applySearch()
+		local q = searchBox.Text:lower()
+		if q == "" then
+			if Window.Current then
+				for _, f in ipairs(Window.Current.Features) do
+					f.Card.Visible = true
+				end
+			end
+			return
+		end
+
+		local matchTab, anyMatchOnCurrent = nil, false
+		for _, tab in ipairs(Window.TabList) do
+			local hasMatch = false
+			for _, f in ipairs(tab.Features) do
+				local m = f.Name:lower():find(q, 1, true) ~= nil
+				if tab == Window.Current then
+					f.Card.Visible = m
+				end
+				if m then hasMatch = true end
+			end
+			if tab == Window.Current then anyMatchOnCurrent = hasMatch end
+			if hasMatch and not matchTab then matchTab = tab end
+		end
+
+		if not anyMatchOnCurrent and matchTab and matchTab ~= Window.Current then
+			Window:SelectTab(matchTab) -- SelectTab сам вызовет _applySearch ещё раз для новой вкладки
+		end
+	end
+	searchBox:GetPropertyChangedSignal("Text"):Connect(function() Window:_applySearch() end)
+
+	------------------------------------------------------------------
+	-- Tab
+	------------------------------------------------------------------
+	function Window:AddTab(name, icon)
+		local Tab = { Name = name, Features = {}, Window = Window }
+
+		local btn, setSelected = makeSidebarButton(name, icon)
+		Tab._setSelected = setSelected
+		btn.MouseButton1Click:Connect(function() Window:SelectTab(Tab) end)
+
+		local scroll = Create("ScrollingFrame", {
+			Name = name .. "_Tab", Size = UDim2.new(1, -30, 1, -20), Position = UDim2.fromOffset(15, 10),
+			BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = T.Border,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = false,
+		}, contentFrame)
+		Create("UIGridLayout", {
+			CellSize = UDim2.new(0.5, -6, 0, 70), CellPadding = UDim2.fromOffset(10, 10), SortOrder = Enum.SortOrder.LayoutOrder,
+		}, scroll)
+		Create("UIPadding", { PaddingBottom = UDim.new(0, 10) }, scroll)
+		Tab.Scroll = scroll
+
+		----------------------------------------------------------------
+		-- Feature card
+		----------------------------------------------------------------
+		function Tab:AddFeature(fcfg)
+			fcfg = fcfg or {}
+			local F = {
+				Name = fcfg.Name or "Feature", Desc = fcfg.Desc or "", Enabled = false,
+				Flag = fcfg.Flag or (name .. "." .. (fcfg.Name or "Feature")),
+				Callback = fcfg.Callback, Bind = fcfg.Bind, Elements = {}, Options = {}, Tab = Tab, Window = Window,
+			}
+
+			local card = Create("Frame", {
+				Name = F.Name, BackgroundColor3 = T.Card, BorderSizePixel = 0, LayoutOrder = #Tab.Features + 1,
+			}, scroll)
+			Corner(card, 8)
+			local stroke = Stroke(card, T.Border, 1)
+			F.Card = card
+
+			local title = Label(card, {
+				Name = "Title", Size = UDim2.new(1, -80, 0, 18), Position = UDim2.fromOffset(12, 10),
+				Text = F.Name, Font = Enum.Font.GothamBold, TextSize = 13, ZIndex = 2,
+			})
+			local desc = Label(card, {
+				Name = "Desc", Size = UDim2.new(1, -24, 0, 30), Position = UDim2.fromOffset(12, 32),
+				Text = F.Desc, TextSize = 11, TextColor3 = T.SubText, TextWrapped = true,
+				TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 2,
+			})
+
+			local clickArea = Create("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 1 }, card)
+
+			local icons = Create("Frame", {
+				Size = UDim2.fromOffset(56, 20), Position = UDim2.new(1, -62, 0, 8), BackgroundTransparency = 1, ZIndex = 3,
+			}, card)
+			Create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Right,
+				Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+			}, icons)
+			local setBtn = IconButton(icons, Library.Icons.CardSettings, "⚙", 18)
+			setBtn.LayoutOrder, setBtn.ZIndex, setBtn.Visible = 1, 3, false
+			local bindBtn, bindProp = IconButton(icons, Library.Icons.CardBind, "⌨", 18)
+			bindBtn.LayoutOrder, bindBtn.ZIndex = 2, 3
+
+			-- визуальное состояние
+			local gradTween
+			local function startGradient()
+				local TT = Library.Theme
+				local g = card:FindFirstChild("ActiveGradient")
+				if g then g:Destroy() end
+				g = Create("UIGradient", {
+					Name = "ActiveGradient",
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, TT.ActiveGradientA),
+						ColorSequenceKeypoint.new(0.5, TT.ActiveGradientB),
+						ColorSequenceKeypoint.new(1, TT.ActiveGradientA),
+					}),
+				}, card)
+				if gradTween then gradTween:Cancel() end
+				gradTween = Loop(g, 4, { Rotation = 360 })
+			end
+			local function stopGradient()
+				if gradTween then gradTween:Cancel() gradTween = nil end
+				local g = card:FindFirstChild("ActiveGradient")
+				if g then g:Destroy() end
+			end
+
+			local function applyVisual(on, animate)
+				local TT = Library.Theme
+				if on then
+					if animate then
+						local pulse = Create("Frame", {
+							AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1, 1),
+							BackgroundColor3 = TT.Accent, BackgroundTransparency = 0.7, BorderSizePixel = 0, ZIndex = 0,
+						}, card)
+						Corner(pulse, 8)
+						Tween(pulse, 0.6, { Size = UDim2.fromScale(1.3, 1.3), BackgroundTransparency = 1 })
+						task.delay(0.6, function() pulse:Destroy() end)
+					end
+					card.BackgroundColor3 = Color3.new(1, 1, 1) -- белая база, цвет даёт градиент
+					startGradient()
+					stroke.Color = TT.ActiveBorder
+					title.TextColor3 = TT.AccentText
+				else
+					stopGradient()
+					card.BackgroundColor3 = TT.Card
+					stroke.Color = TT.Border
+					title.TextColor3 = TT.Text
+				end
+			end
+
+			clickArea.MouseEnter:Connect(function()
+				if F.Enabled then return end
+				local TT = Library.Theme
+				Tween(card, 0.2, { BackgroundColor3 = TT.CardHover })
+				Tween(stroke, 0.2, { Color = TT.ActiveBorder })
+				Tween(title, 0.2, { TextColor3 = TT.AccentText })
+			end)
+			clickArea.MouseLeave:Connect(function()
+				if F.Enabled then return end
+				local TT = Library.Theme
+				Tween(card, 0.2, { BackgroundColor3 = TT.Card })
+				Tween(stroke, 0.2, { Color = TT.Border })
+				Tween(title, 0.2, { TextColor3 = TT.Text })
+			end)
+			clickArea.MouseButton1Click:Connect(function() F:Toggle() end)
+			setBtn.MouseButton1Click:Connect(function() Window:OpenPopup(F) end)
+			bindBtn.MouseButton1Click:Connect(function()
+				Library:Notify({ Title = "Нажми клавишу для " .. F.Name, Text = "Esc / Backspace — сбросить бинд" })
+				Library:_listenKey(function(key)
+					F:SetBind(key)
+					Library:Notify({ Title = F.Name .. ": " .. (key and key.Name or "бинд сброшен") })
+				end)
+			end)
+
+			-- перекраска после SetTheme (карточка перерисовывается в её текущем состоянии on/off)
+			F._repaint = function() applyVisual(F.Enabled, false) end
+
+			-- публичный API фичи
+			function F:Set(state, silent)
+				state = not not state
+				if self.Enabled == state then return end
+				self.Enabled = state
+				Library.Flags[self.Flag] = state
+				applyVisual(state, not silent)
+				if not silent and Window.NotifyOnToggle and fcfg.Notify ~= false then
+					Library:Notify({
+						Title = self.Name .. (state and " включён" or " выключен"),
+						Text = state and "Функция активирована" or "Информация",
+						Type = state and "success" or "info",
+					})
+				end
+				Fire(self.Callback, state)
+			end
+			function F:Toggle() self:Set(not self.Enabled) end
+			function F:SetBind(key)
+				self.Bind = key
+				Library.Flags[self.Flag .. "$bind"] = key or false
+				Tween(bindBtn, 0.15, { [bindProp] = key and Library.Theme.ActiveBorder or Library.Theme.SubText })
+			end
+
+			local function addElement(owner, kind, ename, opts)
+				opts = opts or {}
+				local el = { Type = kind, Name = opts.Name or ename, Flag = owner.Flag .. "." .. ename, Opts = opts, Feature = F, Owner = owner }
+				if kind == "Toggle" then el.Value = opts.Default or false
+				elseif kind == "Slider" then el.Value = opts.Default or opts.Min or 0
+				elseif kind == "Dropdown" then el.Value = opts.Default or (opts.Values and opts.Values[1])
+				elseif kind == "Color" then el.Value = opts.Default or Color3.new(1, 1, 1)
+				elseif kind == "Keybind" then el.Value = opts.Default
+				elseif kind == "TextBox" then el.Value = opts.Default or "" end
+
+				if kind == "Keybind" then
+					el.OnPress, el.Callback = opts.Callback, opts.OnChanged -- Callback = нажатие, OnChanged = смена бинда
+				else
+					el.Callback = opts.Callback
+				end
+
+				function el:Get() return self.Value end
+				function el:Set(v, silent)
+					self.Value = v
+					Library.Flags[self.Flag] = (v == nil) and false or v
+					if self._refresh then self._refresh() end
+					if not silent then Fire(self.Callback, v) end
+				end
+
+				Library.Flags[el.Flag] = (el.Value == nil) and false or el.Value
+				Library.Elements[el.Flag] = el
+				owner.Options[ename] = el
+				table.insert(owner.Elements, el)
+				setBtn.Visible = true
+				return el
+			end
+			function F:AddToggle(n, o) return addElement(F, "Toggle", n, o) end
+			function F:AddSlider(n, o) return addElement(F, "Slider", n, o) end
+			function F:AddDropdown(n, o) return addElement(F, "Dropdown", n, o) end
+			function F:AddColorPicker(n, o) return addElement(F, "Color", n, o) end
+			function F:AddKeybind(n, o) return addElement(F, "Keybind", n, o) end
+			function F:AddTextBox(n, o) return addElement(F, "TextBox", n, o) end
+
+			-- Сворачиваемая группа опций внутри попапа: Group:AddToggle/AddSlider/... работают так же, как у F
+			function F:AddGroup(gname, gopts)
+				gopts = gopts or {}
+				local g = {
+					Type = "Group", Name = gname, Flag = F.Flag .. "." .. gname,
+					Elements = {}, Options = {}, Collapsed = gopts.Collapsed or false, Feature = F,
+				}
+				function g:AddToggle(n, o) return addElement(g, "Toggle", n, o) end
+				function g:AddSlider(n, o) return addElement(g, "Slider", n, o) end
+				function g:AddDropdown(n, o) return addElement(g, "Dropdown", n, o) end
+				function g:AddColorPicker(n, o) return addElement(g, "Color", n, o) end
+				function g:AddKeybind(n, o) return addElement(g, "Keybind", n, o) end
+				function g:AddTextBox(n, o) return addElement(g, "TextBox", n, o) end
+				table.insert(F.Elements, g)
+				setBtn.Visible = true
+				return g
+			end
+
+			Library.Flags[F.Flag] = false
+			table.insert(Tab.Features, F)
+			table.insert(Library.Features, F)
+			Library.FeatureByFlag[F.Flag] = F
+			if F.Bind then F:SetBind(F.Bind) end
+
+			-- каскадное появление
+			card.BackgroundTransparency, title.TextTransparency, desc.TextTransparency = 1, 1, 1
+			task.delay(0.05 * #Tab.Features, function()
+				if not card.Parent then return end
+				Tween(card, 0.3, { BackgroundTransparency = 0 })
+				Tween(title, 0.3, { TextTransparency = 0 })
+				Tween(desc, 0.3, { TextTransparency = 0 })
+			end)
+
+			if fcfg.Default then F:Set(true, true) end
+			return F
+		end
+
+		Window.Tabs[name] = Tab
+		table.insert(Window.TabList, Tab)
+		if not Window.Current then
+			task.defer(function() Window:SelectTab(Tab) end)
+		end
+		return Tab
+	end
+
+	function Window:Notify(opts) Library:Notify(opts) end
+
+	function Window:Destroy()
+		Window:ClosePopup()
+		Window:CloseConfigPopup()
+		Window:CloseFriendPopup()
+        Window:CloseThemePopup()
+		gui:Destroy()
+		local idx = table.find(Library.Windows, Window)
+		if idx then
+			table.remove(Library.Windows, idx)
+		end
+	end
+
+	table.insert(self.Windows, Window)
+	return Window
+end
+
+----------------------------------------------------------------------
+-- Глобальный обработчик клавиш: ToggleKey окна, бинды фич, Keybind-элементы
+----------------------------------------------------------------------
+function Library:_init()
+	if self._inited then
+		return
+	end
+	self._inited = true
+
+	Connect(UserInputService.InputBegan, function(input, gpe)
+		if gpe or self._listening or input.UserInputType ~= Enum.UserInputType.Keyboard then
+			return
+		end
+		local key = input.KeyCode
+		for _, w in ipairs(self.Windows) do
+			if w.ToggleKey == key then w:Toggle() end
+		end
+		for _, f in ipairs(self.Features) do
+			if f.Bind == key then f:Toggle() end
+		end
+		for _, el in pairs(self.Elements) do
+			if el.Type == "Keybind" and el.Value == key then Fire(el.OnPress) end
+		end
+	end)
+
+	self:_loadFriends()
+end
+
+----------------------------------------------------------------------
+-- FriendList (общий на весь модуль список, не привязан к конкретному окну)
+----------------------------------------------------------------------
+function Library:AddFriend(name)
+	if not name or name == "" then return false end
+	name = tostring(name):lower()
+	if table.find(self.FriendList, name) then return false end
+	table.insert(self.FriendList, name)
+	self:_saveFriends()
+	return true
+end
+
+function Library:RemoveFriend(name)
+	if not name or name == "" then return false end
+	local idx = table.find(self.FriendList, tostring(name):lower())
+	if not idx then return false end
+	table.remove(self.FriendList, idx)
+	self:_saveFriends()
+	return true
+end
+
+function Library:IsFriend(who)
+	if who == nil then return false end
+	local name
+	if type(who) == "string" then
+		name = who
+	elseif typeof(who) == "Instance" then
+		if who:IsA("Player") then
+			name = who.Name
+		elseif who:IsA("Model") then
+			local plr = game:GetService("Players"):GetPlayerFromCharacter(who)
+			if not plr then return false end
+			name = plr.Name
+		else
+			return false
+		end
+	else
+		return false
+	end
+	return table.find(self.FriendList, name:lower()) ~= nil
+end
+
+function Library:GetFriends()
+	return self.FriendList
+end
+
+function Library:_saveFriends()
+	if not (writefile and makefolder and isfolder) then
+		return
+	end
+	if not isfolder(self.ConfigFolder) then
+		makefolder(self.ConfigFolder)
+	end
+	local ok = pcall(writefile, self.ConfigFolder .. "/friends.json", HttpService:JSONEncode(self.FriendList))
+	if not ok then
+		warn("[CelestialLib] не удалось сохранить friends.json")
+	end
+end
+
+function Library:_loadFriends()
+	if not (readfile and isfile) then
+		return
+	end
+	local path = self.ConfigFolder .. "/friends.json"
+	if not isfile(path) then
+		return
+	end
+	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+	if ok and type(data) == "table" then
+		self.FriendList = data
+	end
+end
+
+----------------------------------------------------------------------
+-- Конфиги (нужны writefile/readfile/isfolder/makefolder/delfile — есть в большинстве executor'ов)
+----------------------------------------------------------------------
+function Library:SaveConfig(name)
+	if not (writefile and makefolder and isfolder) then
+		return false, "файловые функции недоступны"
+	end
+	if not isfolder(self.ConfigFolder) then
+		makefolder(self.ConfigFolder)
+	end
+	local data = {}
+	for flag, v in pairs(self.Flags) do
+		data[flag] = Encode(v)
+	end
+	writefile(self.ConfigFolder .. "/" .. name .. ".json", HttpService:JSONEncode(data))
+	return true
+end
+
+function Library:LoadConfig(name)
+	if not (readfile and isfile) then
+		return false, "файловые функции недоступны"
+	end
+	local path = self.ConfigFolder .. "/" .. name .. ".json"
+	if not isfile(path) then
+		return false, "конфиг не найден"
+	end
+	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+	if not ok then
+		return false, "битый json"
+	end
+	for flag, raw in pairs(data) do
+		local v = Decode(raw)
+		local feature = self.FeatureByFlag[flag]
+		if feature then
+			feature:Set(v == true, true)
+		elseif flag:sub(-5) == "$bind" then
+			local f2 = self.FeatureByFlag[flag:sub(1, -6)]
+			if f2 then f2:SetBind(v or nil) end
+		else
+			local el = self.Elements[flag]
+			if el then
+				if el.Type == "Keybind" and v == false then v = nil end
+				el:Set(v)
+			end
+		end
+	end
+	return true
+end
+
+function Library:ListConfigs()
+	local out = {}
+	if listfiles and isfolder and isfolder(self.ConfigFolder) then
+		for _, path in ipairs(listfiles(self.ConfigFolder)) do
+			local n = path:match("([^/\\]+)%.json$")
+			if n then table.insert(out, n) end
+		end
+	end
+	return out
+end
+-- Пересобрать скрипт с сохранением настроек: сохраняет текущие Flags в lastconfig.json,
+-- выгружает текущий интерфейс и (если передан url) заново подгружает и исполняет скрипт
+-- через HttpGet+loadstring. Новый запуск сам подхватит lastconfig.json через AutoLoad().
+function Library:ReloadScript(url)
+	self:Unload()
+	if url and loadstring and game then
+		task.spawn(function()
+			local ok, body = pcall(function() return game:HttpGet(url) end)
+			if not ok then
+				warn("[CelestialLib] HttpGet ошибка: " .. tostring(body))
+				return
+			end
+			local ok2, err = pcall(function() loadstring(body)() end)
+			if not ok2 then
+				warn("[CelestialLib] ошибка перезапуска: " .. tostring(err))
+			end
+		end)
+	end
+end
+
+----------------------------------------------------------------------
+-- Unload: сохраняет lastconfig, выключает все фичи (Callback(false)), рвёт соединения, удаляет GUI
+----------------------------------------------------------------------
+function Library:Unload()
+	for _, f in ipairs(self.Features) do
+		if f.Enabled then f:Set(false, true) end
+	end
+	for _, c in ipairs(self.Connections) do
+		c:Disconnect()
+	end
+	table.clear(self.Connections)
+	for _, w in ipairs(table.clone(self.Windows)) do
+		w:Destroy()
+	end
+	if notifyGui then notifyGui:Destroy() notifyGui = nil end
+	if tooltipGui then tooltipGui:Destroy() tooltipGui = nil end
+	self._inited = false
+end
+
+return Library
