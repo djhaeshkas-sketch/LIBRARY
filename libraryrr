@@ -1559,10 +1559,6 @@ function Library:CreateWindow(cfg)
 	-- кнопка друзей
 	Window:AddTopButton(self.Icons.Friends, "♥", function() Window:OpenFriendPopup() end)
 
-    Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
-	Window:OpenThemePopup()
-end)
-
 	-- Анимация показа/скрытия окна (скейл + фейд, туда — Back Out, обратно — Back In)
 	local visTween
 	function Window:SetVisible(state)
@@ -1693,11 +1689,16 @@ end)
 		})
 	end
 	-- Кнопка в сайдбаре без вкладки (например "Выйти"). iconSize необязателен (по умолчанию 24, крупнее вкладок)
-	function Window:AddSidebarButton(name, icon, callback, iconSize)
-		local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
-		btn.MouseButton1Click:Connect(function() Fire(callback) end)
-		return btn
-	end
+    function Window:AddSidebarButton(name, icon, callback, iconSize)
+        local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
+        btn.MouseButton1Click:Connect(function() Fire(callback) end)
+        return btn
+    end
+
+    -- Кнопка "Темы" в сайдбаре (создаётся ПОСЛЕ объявления метода)
+    Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
+        Window:OpenThemePopup()
+    end)
 
 	function Window:SelectTab(tab)
 		if type(tab) == "string" then
