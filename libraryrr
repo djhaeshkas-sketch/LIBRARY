@@ -988,29 +988,22 @@ function Library:CreateWindow(cfg)
 	Window.Sidebar = sidebar
 
 	local logoFrame = Create("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1 }, sidebar)
-	local logoBg = Create("Frame", {
-		Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(14, 9),
-		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
-	}, logoFrame)
-	Corner(logoBg, 8)
-	Create("UIGradient", {
-		Rotation = 45,
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromHex("#6a1c97")),
-			ColorSequenceKeypoint.new(0.5, Color3.fromHex("#7b2cbf")),
-			ColorSequenceKeypoint.new(1, Color3.fromHex("#9d4edd")),
-		}),
-	}, logoBg) -- лого намеренно остаётся фирменным цветом независимо от темы
+
+-- Иконка чита (без подложки)
 	local logoId = cfg.Logo or self.Icons.Logo
 	if logoId and logoId ~= "" then
-		Create("ImageLabel", {
-			Size = UDim2.new(1, -6, 1, -6), Position = UDim2.fromOffset(3, 3), BackgroundTransparency = 1,
-			Image = logoId, ScaleType = Enum.ScaleType.Fit,
-		}, logoBg)
+    	Create("ImageLabel", {
+        	Name = "Logo",
+        	Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(14, 7),
+       	 	BackgroundTransparency = 1, BorderSizePixel = 0,
+       	 	Image = logoId, ScaleType = Enum.ScaleType.Fit,
+    	}, logoFrame)
 	end
+
 	Label(logoFrame, {
-		Size = UDim2.new(1, -56, 0, 32), Position = UDim2.fromOffset(52, 9), Text = cfg.Title or "Celestial",
-		Font = Enum.Font.GothamBold, TextSize = 18,
+    	Size = UDim2.new(1, -60, 0, 32), Position = UDim2.fromOffset(56, 9),
+    	Text = cfg.Title or "Celestial",
+    	Font = Enum.Font.GothamBold, TextSize = 18,
 	})
 
 	local sidebarContent = Create("Frame", {
@@ -1559,6 +1552,10 @@ function Library:CreateWindow(cfg)
 	-- кнопка друзей
 	Window:AddTopButton(self.Icons.Friends, "♥", function() Window:OpenFriendPopup() end)
 
+    Window:AddSidebarButton("Темы", "rbxassetid://132762661426158", function()
+	Window:OpenThemePopup()
+end)
+
 	-- Анимация показа/скрытия окна (скейл + фейд, туда — Back Out, обратно — Back In)
 	local visTween
 	function Window:SetVisible(state)
@@ -1682,18 +1679,22 @@ function Library:CreateWindow(cfg)
 		return btn, setSelected
 	end
 
-	function Window:AddSeparator(text)
-		Label(sidebarContent, {
+	function Window:AddSeparator(text, layoutOrder)
+		local lbl = Label(sidebarContent, {
 			Size = UDim2.new(1, -24, 0, 22), Text = string.upper(text), Font = Enum.Font.GothamBold,
-			TextSize = 10, TextColor3 = T.SubText, LayoutOrder = nextOrder(),
+			TextSize = 10, TextColor3 = T.SubText, LayoutOrder = layoutOrder or nextOrder(),
 		})
+		return lbl
 	end
-	-- Кнопка в сайдбаре без вкладки (например "Выйти"). iconSize необязателен (по умолчанию 24, крупнее вкладок)
-    function Window:AddSidebarButton(name, icon, callback, iconSize)
-        local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
-        btn.MouseButton1Click:Connect(function() Fire(callback) end)
-        return btn
-    end
+
+	function Window:AddSidebarButton(name, icon, callback, iconSize, layoutOrder)
+		local btn = makeSidebarButton(name, icon, nil, iconSize or 24)
+		if layoutOrder then
+			btn.LayoutOrder = layoutOrder
+		end
+		btn.MouseButton1Click:Connect(function() Fire(callback) end)
+		return btn
+	end
 
 	function Window:SelectTab(tab)
 		if type(tab) == "string" then
