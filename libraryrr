@@ -317,6 +317,13 @@ function Library:_repaintTheme()
 	local T = self.Theme
 
 	for _, w in ipairs(self.Windows) do
+		if w.LogoGrad then
+				w.LogoGrad.Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, T.ActiveGradientA),
+					ColorSequenceKeypoint.new(0.5, T.ActiveGradientB),
+					ColorSequenceKeypoint.new(1, T.ActiveGradientA),
+				})
+			end
 		if w.Main and w.Main.Parent then
 			if w.MainStroke then
 				Tween(w.MainStroke, 0.25, { Color = T.Border })
@@ -475,17 +482,21 @@ function Library:Notify(opts)
 	Corner(n, 8)
 	local grad = Create("UIGradient", {
 		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromHex("#1a0a2e")),
-			ColorSequenceKeypoint.new(0.5, Color3.fromHex("#2d1b4e")),
-			ColorSequenceKeypoint.new(1, Color3.fromHex("#1a0a2e")),
+			ColorSequenceKeypoint.new(0, T.Background),
+			ColorSequenceKeypoint.new(0.5, T.BackgroundAlt),
+			ColorSequenceKeypoint.new(1, T.Background),
 		}),
 	}, n)
 	Loop(grad, 4, { Rotation = 360 })
-	Stroke(n, kind.border, 1.5)
+
+	-- Border и иконка = цвет темы, но kind.border оставляем для success/error
+	local borderColor = (opts.Type == "success" or opts.Type == "error") and kind.border or T.ActiveBorder
+	local iconBgColor = (opts.Type == "success" or opts.Type == "error") and kind.bg or T.Accent
+	Stroke(n, borderColor, 1.5)
 
 	local iconBg = Create("Frame", {
 		Size = UDim2.fromOffset(36, 36), Position = UDim2.new(0, 12, 0.5, -18),
-		BackgroundColor3 = kind.bg, BorderSizePixel = 0,
+		BackgroundColor3 = iconBgColor, BorderSizePixel = 0,
 	}, n)
 	Corner(iconBg, 18)
 	local iconId = self.Icons[kind.icon]
@@ -512,9 +523,8 @@ function Library:Notify(opts)
 
 	local bar = Create("Frame", {
 		Size = UDim2.new(1, -4, 0, 2), Position = UDim2.new(0, 2, 1, -4),
-		BackgroundColor3 = kind.border, BorderSizePixel = 0,
+		BackgroundColor3 = borderColor, BorderSizePixel = 0,
 	}, n)
-	Corner(bar, 1)
 
 	Tween(n, 0.4, { Position = UDim2.new() }, Enum.EasingStyle.Back)
 	Tween(bar, duration, { Size = UDim2.new(0, 0, 0, 2) }, Enum.EasingStyle.Linear)
@@ -989,16 +999,36 @@ function Library:CreateWindow(cfg)
 
 	local logoFrame = Create("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1 }, sidebar)
 
--- Иконка чита (без подложки)
-	local logoId = cfg.Logo or self.Icons.Logo
-	if logoId and logoId ~= "" then
-    	Create("ImageLabel", {
-        	Name = "Logo",
-        	Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(14, 7),
-       	 	BackgroundTransparency = 1, BorderSizePixel = 0,
-       	 	Image = logoId, ScaleType = Enum.ScaleType.Fit,
-    	}, logoFrame)
-	end
+-- Иконка чита
+local logoFrame = Create("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1 }, sidebar)
+
+-- Градиентная подложка под иконку (цвета темы)
+local logoBg = Create("Frame", {
+    Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(14, 7),
+    BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+}, logoFrame)
+Corner(logoBg, 8)
+local logoBgGrad = Create("UIGradient", {
+    Rotation = 45,
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, T.ActiveGradientA),
+        ColorSequenceKeypoint.new(0.5, T.ActiveGradientB),
+        ColorSequenceKeypoint.new(1, T.ActiveGradientA),
+    }),
+}, logoBg)
+Window.LogoBg = logoBg
+Window.LogoGrad = logoBgGrad
+
+-- Иконка поверх подложки
+local logoId = cfg.Logo or self.Icons.Logo
+if logoId and logoId ~= "" then
+    Create("ImageLabel", {
+        Name = "Logo",
+        Size = UDim2.new(1, -4, 1, -4), Position = UDim2.fromOffset(2, 2),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+        Image = logoId, ScaleType = Enum.ScaleType.Fit,
+    }, logoBg)
+end
 
 	Label(logoFrame, {
     	Size = UDim2.new(1, -60, 0, 32), Position = UDim2.fromOffset(56, 9),
